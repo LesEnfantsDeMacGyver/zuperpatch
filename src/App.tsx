@@ -2237,21 +2237,32 @@ function App() {
     const sourceEndpoint = routeEndpointReferences(route)
       .map((endpoint) => {
         const device = endpoint.deviceId ? devicesById.get(endpoint.deviceId) : undefined;
+        const upstreamPixels =
+          device?.type === "powerstrip"
+            ? powerPathPixelsToDeviceForColor(endpoint.deviceId as string, route.id)
+            : upstreamPowerPathPixelsToEndpoint(endpoint, devicesById, cables);
+        const priority =
+          device?.type === "producer"
+            ? 0
+            : device?.type === "powerstrip"
+              ? 1
+              : endpoint.deviceId
+                ? 2
+                : 3;
         return {
           endpoint,
-          upstreamPixels:
-            device?.type === "powerstrip"
-              ? powerPathPixelsToDeviceForColor(endpoint.deviceId as string, route.id)
-              : upstreamPowerPathPixelsToEndpoint(endpoint, devicesById, cables),
+          priority,
+          upstreamPixels,
         };
       })
       .filter(
         (candidate): candidate is {
           endpoint: RouteEndpointReference;
+          priority: number;
           upstreamPixels: number;
         } => candidate.upstreamPixels !== undefined,
       )
-      .sort((a, b) => a.upstreamPixels - b.upstreamPixels)[0];
+      .sort((a, b) => a.priority - b.priority || a.upstreamPixels - b.upstreamPixels)[0];
     if (!sourceEndpoint) return undefined;
     return {
       offsetPx: sourceEndpoint.upstreamPixels * viewScale,
@@ -5397,8 +5408,15 @@ function CableRouteView({
     sourcePointIndex !== undefined && sourcePointIndex >= 0 && sourcePointIndex < points.length
       ? cumulativePixelsAtPoint(points, sourcePointIndex)
       : 0;
+  const sourceBranch = branches.find((branch) => branch.id === colorPath?.sourceBranchId);
+  const sourceBranchPixels =
+    sourceBranch !== undefined
+      ? routePixels(branchPathPoints({ id: "", page: 0, points, type: config.id }, sourceBranch))
+      : undefined;
   const colorDistanceForTrunkPixels = (pixels: number) =>
-    (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceTrunkPixels);
+    sourceBranchPixels !== undefined
+      ? (colorPath?.offsetPx ?? 0) + sourceBranchPixels + Math.max(0, trunkPixels - pixels)
+      : (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceTrunkPixels);
   return (
     <g
       className={[
@@ -5457,10 +5475,8 @@ function CableRouteView({
             const branchTravelled = routePixels(branchPath.slice(0, index + 1));
             const segmentLength = distance(start, point);
             const gradientId = `${config.id}-${branch.id}-${start.x}-${start.y}-${point.x}-${point.y}`;
-            const sourceBranchPixels =
-              colorPath?.sourceBranchId === branch.id ? routePixels(branchPath) : undefined;
             const branchColorDistance = (pixels: number) =>
-              sourceBranchPixels !== undefined
+              colorPath?.sourceBranchId === branch.id && sourceBranchPixels !== undefined
                 ? (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceBranchPixels)
                 : colorDistanceForTrunkPixels(trunkPixels) + pixels;
             return (
