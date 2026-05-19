@@ -771,6 +771,16 @@ function routeEndpointReferences(route: CableRoute) {
   return endpoints;
 }
 
+function isInternalCableJunctionEndpoint(
+  route: CableRoute,
+  endpoint: RouteEndpointReference,
+) {
+  const branches = route.branches ?? [];
+  const internalTrunkPoints =
+    branches.length > 0 ? route.points.slice(1) : route.points.slice(1, -1);
+  return internalTrunkPoints.some((point) => samePoint(point, endpoint.point));
+}
+
 function closestPointOnSegment(point: Point, start: Point, end: Point) {
   const segmentX = end.x - start.x;
   const segmentY = end.y - start.y;
@@ -1638,6 +1648,7 @@ function closestSourcePoint(point: Point, source: ConsumerSource) {
 function powerCableSourcePoints(route: CableRoute, devices: Device[]) {
   return routeEndpointReferences(route)
     .filter((endpoint) => {
+      if (isInternalCableJunctionEndpoint(route, endpoint)) return false;
       if (!endpoint.deviceId) return true;
       const endpointDevice = devices.find((device) => device.id === endpoint.deviceId);
       return endpointDevice?.type !== "consumer" && endpointDevice?.type !== "switch";
@@ -3258,6 +3269,7 @@ function App() {
       .flatMap((route) =>
         routeEndpointReferences(route)
           .filter((endpoint) => {
+            if (isInternalCableJunctionEndpoint(route, endpoint)) return false;
             if (endpoint.deviceId === device.id) return false;
             if (!endpoint.deviceId) return true;
             return devicesById.get(endpoint.deviceId)?.type !== "consumer";
