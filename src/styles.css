@@ -642,6 +642,12 @@ h2 {
   position: absolute;
 }
 
+.selection-control-overlay {
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+}
+
 .grid-layer line {
   stroke: var(--color-grid);
   stroke-width: 1;
@@ -670,11 +676,17 @@ h2 {
 }
 
 .selection-rotate-knob {
+  appearance: none;
   cursor: grab;
-  fill: var(--color-panel);
+  background: var(--color-panel);
+  border: 2px solid #2563eb;
+  border-radius: 999px;
+  height: 14px;
+  min-height: 0;
+  padding: 0;
   pointer-events: all;
-  stroke: #2563eb;
-  stroke-width: 2;
+  position: absolute;
+  width: 14px;
 }
 
 .selection-rotate-knob:active {
@@ -682,11 +694,17 @@ h2 {
 }
 
 .selection-scale-knob {
+  appearance: none;
+  background: var(--color-panel);
+  border: 2px solid #2563eb;
+  border-radius: 2px;
   cursor: nwse-resize;
-  fill: var(--color-panel);
+  height: 12px;
+  min-height: 0;
+  padding: 0;
   pointer-events: all;
-  stroke: #2563eb;
-  stroke-width: 2;
+  position: absolute;
+  width: 12px;
 }
 
 .calibration-layer line {

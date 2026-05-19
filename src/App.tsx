@@ -5356,7 +5356,7 @@ function App() {
     });
   }
 
-  function beginSelectionRotation(event: PointerEvent<SVGCircleElement>) {
+  function beginSelectionRotation(event: PointerEvent<Element>) {
     if (!selectedObjectBounds || selectedObjectCount === 0) return;
     event.stopPropagation();
     event.preventDefault();
@@ -5383,7 +5383,7 @@ function App() {
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function beginSelectionScale(event: PointerEvent<SVGRectElement>) {
+  function beginSelectionScale(event: PointerEvent<Element>) {
     if (!selectedObjectBounds || selectedObjectCount === 0) return;
     event.stopPropagation();
     event.preventDefault();
@@ -7053,60 +7053,71 @@ function App() {
                 />
               )}
 
-              {mode === "select" && selectedObjectBounds && selectedObjectCount > 0 && (
-                <g className="selection-box">
-                  {(() => {
-                    const min = toDisplayPoint({
-                      x: selectedObjectBounds.minX,
-                      y: selectedObjectBounds.minY,
-                    });
-                    const max = toDisplayPoint({
-                      x: selectedObjectBounds.maxX,
-                      y: selectedObjectBounds.maxY,
-                    });
-                    const centerX = (min.x + max.x) / 2;
-                    const knobY = min.y - 28;
-                    const scaleHandleSize = 12;
-                    const handleInset = scaleHandleSize / 2 + 2;
-                    const rotateHandle = {
-                      x: clampNumber(centerX, handleInset, pageSize.width - handleInset),
-                      y: clampNumber(knobY, handleInset, pageSize.height - handleInset),
-                    };
-                    const scaleHandle = {
-                      x: clampNumber(max.x, handleInset, pageSize.width - handleInset),
-                      y: clampNumber(max.y, handleInset, pageSize.height - handleInset),
-                    };
-                    return (
-                      <>
-                        <rect
-                          x={min.x}
-                          y={min.y}
-                          width={max.x - min.x}
-                          height={max.y - min.y}
-                        />
-                        <line x1={centerX} x2={rotateHandle.x} y1={min.y} y2={rotateHandle.y} />
-                        <circle
-                          className="selection-rotate-knob"
-                          cx={rotateHandle.x}
-                          cy={rotateHandle.y}
-                          r="7"
-                          onPointerDown={beginSelectionRotation}
-                        />
-                        <rect
-                          className="selection-scale-knob"
-                          x={scaleHandle.x - scaleHandleSize / 2}
-                          y={scaleHandle.y - scaleHandleSize / 2}
-                          width={scaleHandleSize}
-                          height={scaleHandleSize}
-                          rx="2"
-                          onPointerDown={beginSelectionScale}
-                        />
-                      </>
-                    );
-                  })()}
-                </g>
-              )}
             </svg>
+            {mode === "select" && selectedObjectBounds && selectedObjectCount > 0 && (() => {
+              const min = toDisplayPoint({
+                x: selectedObjectBounds.minX,
+                y: selectedObjectBounds.minY,
+              });
+              const max = toDisplayPoint({
+                x: selectedObjectBounds.maxX,
+                y: selectedObjectBounds.maxY,
+              });
+              const centerX = (min.x + max.x) / 2;
+              const knobY = min.y - 28;
+              const scaleHandleSize = 12;
+              const hitMargin = 16;
+              const overlayMinX = Math.min(0, min.x - hitMargin);
+              const overlayMinY = Math.min(0, knobY - hitMargin);
+              const overlayMaxX = Math.max(pageSize.width, max.x + hitMargin);
+              const overlayMaxY = Math.max(pageSize.height, max.y + hitMargin);
+              const overlayWidth = overlayMaxX - overlayMinX;
+              const overlayHeight = overlayMaxY - overlayMinY;
+              const rotateHandleStyle = {
+                left: centerX - 7,
+                top: knobY - 7,
+              };
+              const scaleHandleStyle = {
+                left: max.x - scaleHandleSize / 2,
+                top: max.y - scaleHandleSize / 2,
+              };
+
+              return (
+                <>
+                  <svg
+                    className="selection-control-overlay"
+                    height={overlayHeight}
+                    style={{ left: overlayMinX, top: overlayMinY }}
+                    viewBox={`${overlayMinX} ${overlayMinY} ${overlayWidth} ${overlayHeight}`}
+                    width={overlayWidth}
+                  >
+                    <g className="selection-box">
+                      <rect
+                        x={min.x}
+                        y={min.y}
+                        width={max.x - min.x}
+                        height={max.y - min.y}
+                      />
+                      <line x1={centerX} x2={centerX} y1={min.y} y2={knobY} />
+                    </g>
+                  </svg>
+                  <button
+                    aria-label="Rotate selection"
+                    className="selection-rotate-knob"
+                    style={rotateHandleStyle}
+                    type="button"
+                    onPointerDown={beginSelectionRotation}
+                  />
+                  <button
+                    aria-label="Scale selection"
+                    className="selection-scale-knob"
+                    style={scaleHandleStyle}
+                    type="button"
+                    onPointerDown={beginSelectionScale}
+                  />
+                </>
+              );
+            })()}
           </div>
         </div>
 
