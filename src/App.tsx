@@ -7054,7 +7054,7 @@ function App() {
               )}
 
             </svg>
-            {mode === "select" && selectedObjectBounds && selectedObjectCount > 0 && (() => {
+            {mode === "select" && selectedObjectBounds && selectedObjectCount > 1 && (() => {
               const min = toDisplayPoint({
                 x: selectedObjectBounds.minX,
                 y: selectedObjectBounds.minY,
