@@ -2500,13 +2500,33 @@ function App() {
       document.setDrawColor(180);
       document.line(margin, y - 4, pageWidth - margin, y - 4);
     };
-    const setDrawColorFromHex = (color: string) => {
-      const rgb = hexToRgb(color);
+    const setDrawColorFromRgb = (rgb: { r: number; g: number; b: number }) => {
       document.setDrawColor(
         Math.round(rgb.r * 255),
         Math.round(rgb.g * 255),
         Math.round(rgb.b * 255),
       );
+    };
+    const drawGradientRule = (
+      startX: number,
+      endX: number,
+      lineY: number,
+      startColor: string,
+      endColor: string,
+    ) => {
+      const segmentCount = 40;
+      const start = hexToRgb(startColor);
+      const end = hexToRgb(endColor);
+      document.setLineWidth(1.8);
+      for (let index = 0; index < segmentCount; index += 1) {
+        const segmentStartRatio = index / segmentCount;
+        const segmentEndRatio = (index + 1) / segmentCount;
+        const segmentStartX = startX + (endX - startX) * segmentStartRatio;
+        const segmentEndX = startX + (endX - startX) * segmentEndRatio;
+        setDrawColorFromRgb(mixColor(start, end, (segmentStartRatio + segmentEndRatio) / 2));
+        document.line(segmentStartX, lineY, segmentEndX, lineY);
+      }
+      document.setLineWidth(0.2);
     };
     const addCableGroup = (stat: (typeof stats)[number]) => {
       addPageIfNeeded(18);
@@ -2517,10 +2537,7 @@ function App() {
       document.setTextColor(0);
       document.text(title, margin, y);
       const lineStartX = Math.min(margin + document.getTextWidth(title) + 4, pageWidth - margin - 8);
-      setDrawColorFromHex(stat.colorStart);
-      document.setLineWidth(1.8);
-      document.line(lineStartX, y - 1.4, pageWidth - margin, y - 1.4);
-      document.setLineWidth(0.2);
+      drawGradientRule(lineStartX, pageWidth - margin, y - 1.4, stat.colorStart, stat.colorEnd);
       y += 5;
       document.setFont("helvetica", "normal");
       document.setFontSize(9);
