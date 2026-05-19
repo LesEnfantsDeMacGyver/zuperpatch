@@ -6071,16 +6071,19 @@ function App() {
           )}
           <div className="stats-list">
             {powerStats.map((producer) => (
-              <section
-                className={producer.overLimit ? "stat warning" : "stat"}
-                key={producer.id}
-              >
+              <section className="stat" key={producer.id}>
                 <div className="stat-head">
                   <span className="swatch power-swatch" />
                   <strong>{producer.name}</strong>
                 </div>
                 <dl>
-                  <div>
+                  <div
+                    className={
+                      producer.capacityW > 0 && producer.usedW > producer.capacityW
+                        ? "stat-cell warning"
+                        : undefined
+                    }
+                  >
                     <dt>Subscribed</dt>
                     <dd>{powerLabel(producer.usedW)}</dd>
                   </div>
@@ -6088,7 +6091,13 @@ function App() {
                     <dt>Available</dt>
                     <dd>{powerLabel(producer.capacityW)}</dd>
                   </div>
-                  <div>
+                  <div
+                    className={
+                      producer.capacityW > 0 && producer.remainingW < 0
+                        ? "stat-cell warning"
+                        : undefined
+                    }
+                  >
                     <dt>Remaining</dt>
                     <dd>{powerLabel(producer.remainingW)}</dd>
                   </div>
@@ -6100,7 +6109,7 @@ function App() {
                     <dt>Electrical cables</dt>
                     <dd>{producer.electricalCableCount}</dd>
                   </div>
-                  <div>
+                  <div className={producer.overSocketLimit ? "stat-cell warning" : undefined}>
                     <dt>Power sockets</dt>
                     <dd>
                       {producer.socketUsage} / {producer.socketCapacity}
@@ -6109,16 +6118,36 @@ function App() {
                 </dl>
                 <div className="load-meter" aria-label={`${producer.name} subscribed ${Math.round(producer.percent)} percent`}>
                   <span
-                    className={producer.overLimit ? "over" : ""}
+                    className={
+                      producer.capacityW > 0 && producer.usedW > producer.capacityW
+                        ? "over"
+                        : ""
+                    }
                     style={{ width: `${Math.min(producer.percent, 100)}%` }}
                   />
                 </div>
                 <p>
-                  {producer.capacityW > 0
-                    ? `${Math.round(producer.percent)}% subscribed${
-                        producer.overSocketLimit ? "; socket capacity exceeded" : ""
-                      }`
-                    : "Set available power to calculate subscription."}
+                  {producer.capacityW > 0 ? (
+                    <>
+                      <span
+                        className={
+                          producer.usedW > producer.capacityW ? "stat-message warning" : undefined
+                        }
+                      >
+                        {Math.round(producer.percent)}% subscribed
+                      </span>
+                      {producer.overSocketLimit && (
+                        <>
+                          {"; "}
+                          <span className="stat-message warning">
+                            socket capacity exceeded
+                          </span>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    "Set available power to calculate subscription."
+                  )}
                 </p>
               </section>
             ))}

@@ -41,6 +41,9 @@
   --color-warning-bg: #fff7ed;
   --color-warning-border: #fed7aa;
   --color-warning-text: #9a3412;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-danger-text: #b91c1c;
   --color-info-bg: #ecfeff;
   --color-info-text: #155e75;
   --color-meter-bg: #edf1f7;
@@ -84,6 +87,9 @@
     --color-warning-bg: #321b10;
     --color-warning-border: #8b4a22;
     --color-warning-text: #f4b98b;
+    --color-danger-bg: #35151a;
+    --color-danger-border: #7f1d1d;
+    --color-danger-text: #fca5a5;
     --color-info-bg: #0e2a32;
     --color-info-text: #8fd7e6;
     --color-meter-bg: #273244;
@@ -1004,7 +1010,19 @@ dl {
 dl div {
   background: var(--color-soft);
   border-radius: 6px;
+  border: 1px solid transparent;
   padding: 0.45rem;
+}
+
+dl div.stat-cell.warning {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+}
+
+dl div.stat-cell.warning dt,
+dl div.stat-cell.warning dd,
+.stat-message.warning {
+  color: var(--color-danger-text);
 }
 
 dt {
