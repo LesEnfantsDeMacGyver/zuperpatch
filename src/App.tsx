@@ -6594,7 +6594,7 @@ function AutoSourceLink({
             dur="1.2s"
             from="0"
             repeatCount="indefinite"
-            to={String(-flowDashCyclePx)}
+            to={String(flowDashCyclePx)}
           />
         )}
       </path>
