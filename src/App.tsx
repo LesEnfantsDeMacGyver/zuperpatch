@@ -238,6 +238,7 @@ const flowDashCyclePx = 52;
 const cablePointSnapRadiusPx = 11;
 const defaultPowerSourceSockets = 4;
 const defaultEthernetSwitchSockets = 8;
+const desiredFreeSocketLoadW = 30;
 const electricalReferenceVoltageV = 230;
 const electricalCordMaxLoadA = 10;
 const electricalCordMaxLoadW = electricalReferenceVoltageV * electricalCordMaxLoadA;
@@ -2646,8 +2647,9 @@ function App() {
 
       const nextVisitedPowerstripIds = new Set(visitedPowerstripIds);
       nextVisitedPowerstripIds.add(powerstripId);
+      const powerstrip = devicesById.get(powerstripId);
       const countedDeviceIds = new Set<string>();
-      let totalW = 0;
+      let totalW = Math.max(0, powerstrip?.desiredFreeSockets ?? 0) * desiredFreeSocketLoadW;
 
       const addDeviceLoad = (device: Device) => {
         if (countedDeviceIds.has(device.id)) return;
@@ -2846,6 +2848,14 @@ function App() {
         }
       });
 
+      devices
+        .filter((device) => device.type === "powerstrip")
+        .forEach((powerstrip) => {
+          if (powerstripDependsOnRoute(powerstrip.id, route.id)) {
+            totalW += Math.max(0, powerstrip.desiredFreeSockets ?? 0) * desiredFreeSocketLoadW;
+          }
+        });
+
       ratios.set(route.id, electricalLoadRatioForWatts(totalW));
     });
 
@@ -2853,6 +2863,7 @@ function App() {
   }, [
     cables,
     consumerSourceAssignments,
+    devices,
     devicesById,
     directPowerConsumerAttachments,
     powerLoadWattsForDevice,
@@ -3525,7 +3536,18 @@ function App() {
         (sum, switchDevice) => sum + switchRequiredPowerW(switchDevice),
         0,
       );
-      const usedW = consumerLoadW + switchLoadW;
+      const desiredFreeSocketReserveW = devices
+        .filter(
+          (device) =>
+            device.type === "powerstrip" &&
+            producerIdForPowerstripWithAuto(device.id) === producer.id,
+        )
+        .reduce(
+          (sum, powerstrip) =>
+            sum + Math.max(0, powerstrip.desiredFreeSockets ?? 0) * desiredFreeSocketLoadW,
+          0,
+        );
+      const usedW = consumerLoadW + switchLoadW + desiredFreeSocketReserveW;
       const capacityW = producer.availablePowerW ?? 0;
       const electricalCableCount =
         producerPowerCableAttachments.find(
@@ -3555,6 +3577,7 @@ function App() {
         percent: capacityW > 0 ? (usedW / capacityW) * 100 : 0,
         consumerCount: assignedConsumers.length,
         loadCount: assignedConsumers.length + assignedSwitches.length,
+        desiredFreeSocketReserveW,
         switchCount: assignedSwitches.length,
         electricalCableCount,
         socketUsage,
