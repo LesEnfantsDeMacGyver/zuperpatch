@@ -340,6 +340,38 @@ function isTextEditingTarget(target: EventTarget | null) {
     : false;
 }
 
+function readableStylesheetText() {
+  return Array.from(document.styleSheets)
+    .map((styleSheet) => {
+      try {
+        return Array.from(styleSheet.cssRules)
+          .map((rule) => rule.cssText)
+          .join("\n");
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function computedCssVariables() {
+  const styles = window.getComputedStyle(document.documentElement);
+  return Array.from(styles)
+    .filter((name) => name.startsWith("--"))
+    .map((name) => `${name}: ${styles.getPropertyValue(name)};`)
+    .join(" ");
+}
+
+function loadImage(source: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Image could not be loaded."));
+    image.src = source;
+  });
+}
+
 function distance(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -4118,6 +4150,83 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  async function downloadPlanPdf() {
+    const stage = stageRef.current;
+    const floorPlanCanvas = canvasRef.current;
+    const overlay = stage?.querySelector<SVGSVGElement>("svg.overlay");
+    if (!stage || !floorPlanCanvas || !overlay) return;
+
+    try {
+      const scale = Math.max(1, window.devicePixelRatio || 1);
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = Math.ceil(pageSize.width * scale);
+      exportCanvas.height = Math.ceil(pageSize.height * scale);
+      const context = exportCanvas.getContext("2d");
+      if (!context) return;
+
+      context.setTransform(scale, 0, 0, scale, 0, 0);
+      context.imageSmoothingEnabled = true;
+      context.fillStyle = window.getComputedStyle(stage).backgroundColor || "#ffffff";
+      context.fillRect(0, 0, pageSize.width, pageSize.height);
+
+      const floorPlanStyles = window.getComputedStyle(floorPlanCanvas);
+      context.save();
+      context.globalAlpha = floorPlanOpacity;
+      if (floorPlanStyles.filter && floorPlanStyles.filter !== "none") {
+        context.filter = floorPlanStyles.filter;
+      }
+      context.drawImage(floorPlanCanvas, 0, 0, pageSize.width, pageSize.height);
+      context.restore();
+
+      const overlayClone = overlay.cloneNode(true) as SVGSVGElement;
+      overlayClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      overlayClone.setAttribute("width", String(pageSize.width));
+      overlayClone.setAttribute("height", String(pageSize.height));
+      overlayClone.setAttribute("viewBox", `0 0 ${pageSize.width} ${pageSize.height}`);
+      overlayClone.setAttribute(
+        "style",
+        `${overlayClone.getAttribute("style") ?? ""}; ${computedCssVariables()}`,
+      );
+
+      const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+      style.textContent = readableStylesheetText();
+      overlayClone.insertBefore(style, overlayClone.firstChild);
+
+      const serializedSvg = new XMLSerializer().serializeToString(overlayClone);
+      const svgBlob = new Blob([serializedSvg], {
+        type: "image/svg+xml;charset=utf-8",
+      });
+      const svgUrl = URL.createObjectURL(svgBlob);
+      try {
+        const overlayImage = await loadImage(svgUrl);
+        context.drawImage(overlayImage, 0, 0, pageSize.width, pageSize.height);
+      } finally {
+        URL.revokeObjectURL(svgUrl);
+      }
+
+      const orientation: "landscape" | "portrait" =
+        pageSize.width >= pageSize.height ? "landscape" : "portrait";
+      const pdf = new jsPDF({
+        orientation,
+        unit: "px",
+        format: [pageSize.width, pageSize.height],
+      });
+      pdf.addImage(
+        exportCanvas.toDataURL("image/png"),
+        "PNG",
+        0,
+        0,
+        pageSize.width,
+        pageSize.height,
+      );
+      const baseName = (pdfName || "zuperpatch-plan").replace(/\.pdf$/i, "");
+      const pageSuffix = pageCount > 1 ? `-page-${pageNumber}` : "";
+      pdf.save(`${baseName}-plan${pageSuffix}.pdf`);
+    } catch {
+      setStorageNotice("Plan PDF could not be exported.");
+    }
+  }
+
   function downloadBillOfMaterials() {
     const document = new jsPDF();
     const margin = 14;
@@ -5975,6 +6084,10 @@ function App() {
             <button type="button" onClick={downloadProject}>
               <Download aria-hidden="true" />
               Download
+            </button>
+            <button type="button" onClick={downloadPlanPdf}>
+              <Download aria-hidden="true" />
+              Plan PDF
             </button>
             <button type="button" onClick={downloadBillOfMaterials}>
               <Download aria-hidden="true" />
