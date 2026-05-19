@@ -1687,32 +1687,51 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let renderTask:
+      | {
+          cancel: () => void;
+          promise: Promise<unknown>;
+        }
+      | undefined;
     async function renderPage(page: PDFPageProxy) {
+      if (cancelled) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const pixelRatio = window.devicePixelRatio || 1;
       const viewport = page.getViewport({ scale: zoom });
       const context = canvas.getContext("2d");
       if (!context) return;
+      if (cancelled) return;
       setPageSize({ width: viewport.width, height: viewport.height });
-      canvas.width = Math.floor(viewport.width * pixelRatio);
-      canvas.height = Math.floor(viewport.height * pixelRatio);
+      canvas.width = Math.ceil(viewport.width * pixelRatio);
+      canvas.height = Math.ceil(viewport.height * pixelRatio);
       canvas.style.width = `${viewport.width}px`;
       canvas.style.height = `${viewport.height}px`;
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, viewport.width, viewport.height);
       setRendering(true);
-      await page.render({ canvasContext: context, viewport }).promise;
+      renderTask = page.render({ canvasContext: context, viewport });
+      try {
+        await renderTask.promise;
+      } catch (error) {
+        if (!cancelled) {
+          throw error;
+        }
+      }
       if (!cancelled) setRendering(false);
     }
 
     if (!pdfDoc) return;
-    pdfDoc.getPage(pageNumber).then(renderPage).catch(() => {
+    pdfDoc.getPage(pageNumber).then((page) => {
+      if (cancelled) return undefined;
+      return renderPage(page);
+    }).catch(() => {
       if (!cancelled) setRendering(false);
     });
 
     return () => {
       cancelled = true;
+      renderTask?.cancel();
     };
   }, [pageNumber, pdfDoc, zoom]);
 
