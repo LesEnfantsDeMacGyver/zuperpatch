@@ -944,16 +944,15 @@ function constrainAttachedDevicePoint(
   attachments: AttachedCablePoint[],
   routes: CableRoute[],
   shouldConstrain: boolean,
-  bounds: { width: number; height: number },
 ) {
-  if (!shouldConstrain || attachments.length === 0) return clampPoint(target, bounds);
+  if (!shouldConstrain || attachments.length === 0) return target;
   const anchor = attachments
     .map((attachment) => {
       const route = routes.find((currentRoute) => currentRoute.id === attachment.routeId);
       return route ? attachedPointSnapAnchor(route, attachment) : undefined;
     })
     .find((point): point is Point => Boolean(point));
-  return clampPoint(anchor ? constrainTo45Degrees(anchor, target) : target, bounds);
+  return anchor ? constrainTo45Degrees(anchor, target) : target;
 }
 
 function scalePoint(point: Point, scale: number) {
@@ -4901,6 +4900,7 @@ function App() {
       return;
     }
     if (draggingCablePoint) {
+      const editPoint = pointerFromEvent(event, false);
       const shouldConstrain = event.shiftKey || isShiftPressed;
       const excludedDeviceIdsForRoute = (route: CableRoute) => {
         const excludedDeviceIds =
@@ -4931,7 +4931,7 @@ function App() {
           movingPointKeys.add(cablePointKey(draggingCablePoint));
         }
 
-        let editedPoint = point;
+        let editedPoint = editPoint;
         if (shouldConstrain) {
           if (
             draggingCablePoint.branchId !== undefined &&
@@ -4944,12 +4944,12 @@ function App() {
               draggingCablePoint.branchPointIndex === 0
                 ? activeRoute.points[activeRoute.points.length - 1]
                 : branch?.points[draggingCablePoint.branchPointIndex - 1];
-            editedPoint = anchor ? constrainTo45Degrees(anchor, point) : point;
+            editedPoint = anchor ? constrainTo45Degrees(anchor, editPoint) : editPoint;
           } else if (draggingCablePoint.pointIndex !== undefined) {
             editedPoint = constrainEditedRoutePoint(
               activeRoute.points,
               draggingCablePoint.pointIndex,
-              point,
+              editPoint,
             );
           }
         } else {
@@ -5012,12 +5012,12 @@ function App() {
       return;
     }
     if (draggingDevice) {
+      const editPoint = pointerFromEvent(event, false);
       const attachedDevicePoint = constrainAttachedDevicePoint(
-        point,
+        editPoint,
         draggingDevice.attachedCablePoints,
         cables,
         event.shiftKey || isShiftPressed,
-        modelPageSize,
       );
       setDevices((current) =>
         current.map((device) =>
