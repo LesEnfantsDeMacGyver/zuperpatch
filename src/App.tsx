@@ -717,6 +717,20 @@ function countByDeviceType(devices: Device[], type: DeviceType) {
   return devices.filter((device) => device.type === type).length;
 }
 
+function commonDeviceValue<T>(
+  devices: Device[],
+  getValue: {
+    // eslint-disable-next-line no-unused-vars
+    (device: Device): T;
+  },
+) {
+  if (devices.length === 0) return undefined;
+  const firstValue = getValue(devices[0]);
+  return devices.every((device) => Object.is(getValue(device), firstValue))
+    ? firstValue
+    : undefined;
+}
+
 function socketCapacityForDevice(device: Device) {
   if (device.socketCapacity !== undefined) return Math.max(0, device.socketCapacity);
   if (device.type === "producer") return defaultPowerSourceSockets;
@@ -1248,6 +1262,7 @@ function App() {
   const [draggingCablePoint, setDraggingCablePoint] = useState<DraggingCablePoint | null>(null);
   const [selectedCablePoint, setSelectedCablePoint] = useState<SelectedCablePoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
   const [copiedDevice, setCopiedDevice] = useState<Device | null>(null);
   const [poppedDeviceId, setPoppedDeviceId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -1486,7 +1501,10 @@ function App() {
         finishRoute();
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c") {
-        const device = devices.find((currentDevice) => currentDevice.id === selectedId);
+        const device =
+          selectedDeviceIds.length === 1
+            ? devices.find((currentDevice) => currentDevice.id === selectedDeviceIds[0])
+            : undefined;
         if (device) {
           event.preventDefault();
           setCopiedDevice(device);
@@ -1543,7 +1561,8 @@ function App() {
       }
       if (
         (event.key === "Backspace" || event.key === "Delete") &&
-        (devices.some((device) => device.id === selectedId) ||
+        (selectedDeviceIds.length > 0 ||
+          devices.some((device) => device.id === selectedId) ||
           cables.some((route) => route.id === selectedId))
       ) {
         event.preventDefault();
@@ -1613,7 +1632,57 @@ function App() {
     ? currentCables.filter((route) => route.type === hoveredPlanCableType)
     : currentCables;
   const currentDevices = devices.filter((device) => device.page === pageNumber);
-  const selectedDevice = devices.find((device) => device.id === selectedId);
+  const selectedDevices = selectedDeviceIds
+    .map((deviceId) => devices.find((device) => device.id === deviceId))
+    .filter((device): device is Device => Boolean(device));
+  const selectedDevice = selectedDevices.length === 1 ? selectedDevices[0] : undefined;
+  const selectedDeviceCount = selectedDevices.length;
+  const selectedCommonDeviceType =
+    selectedDevices.length > 0 && selectedDevices.every((device) => device.type === selectedDevices[0].type)
+      ? selectedDevices[0].type
+      : undefined;
+  const selectedCommonPage =
+    selectedDevices.length > 0 && selectedDevices.every((device) => device.page === selectedDevices[0].page)
+      ? selectedDevices[0].page
+      : undefined;
+  const selectedDevicesAllHaveSocketCapacity =
+    selectedDevices.length > 1 &&
+    selectedDevices.every((device) => device.type === "producer" || device.type === "switch");
+  const selectedCommonLabelPosition = commonDeviceValue(
+    selectedDevices,
+    (device) => device.labelPosition ?? "bottom",
+  );
+  const selectedCommonName = commonDeviceValue(
+    selectedDevices,
+    (device) => device.name ?? "",
+  );
+  const selectedCommonDesiredFreeSockets = commonDeviceValue(
+    selectedDevices,
+    (device) => device.desiredFreeSockets ?? 0,
+  );
+  const selectedCommonSocketCapacity = commonDeviceValue(
+    selectedDevices,
+    (device) => socketCapacityForDevice(device),
+  );
+  const selectedCommonAvailablePowerW = commonDeviceValue(
+    selectedDevices,
+    (device) => device.availablePowerW ?? 0,
+  );
+  const selectedCommonRequiredPowerW = commonDeviceValue(
+    selectedDevices,
+    (device) => device.powerW ?? 0,
+  );
+  const selectedCommonPoePowerW = commonDeviceValue(
+    selectedDevices,
+    (device) => device.poePowerW ?? 0,
+  );
+  const selectedCommonSourceSelection = commonDeviceValue(selectedDevices, (device) => {
+    if ((device.sourceMode ?? "auto") === "auto") return "auto";
+    if (device.sourceType && device.sourceId) {
+      return sourceValue({ type: device.sourceType, id: device.sourceId });
+    }
+    return "none";
+  });
   const producers = devices.filter((device) => device.type === "producer");
   const consumers = devices.filter((device) => device.type === "consumer");
   const ethernetClients = devices.filter((device) => device.type === "ethernetClient");
@@ -2220,6 +2289,7 @@ function App() {
     setRouteDraftDeviceIds([]);
     setCursorPoint(null);
     setSelectedId(null);
+    setSelectedDeviceIds([]);
     setStorageNotice("");
     queueViewPositionRestore(defaultViewPosition);
   }
@@ -2249,6 +2319,7 @@ function App() {
     setCursorPoint(null);
     setScaleDraft(null);
     setSelectedId(null);
+    setSelectedDeviceIds([]);
     queueViewPositionRestore(project.viewPosition);
 
     if (project.pdfDataUrl) {
@@ -2358,6 +2429,11 @@ function App() {
     setDraggingDevice(null);
     setDraggingCablePoint(null);
     setSelectedId(snapshot.selectedId);
+    setSelectedDeviceIds(
+      snapshot.selectedId && project.devices.some((device) => device.id === snapshot.selectedId)
+        ? [snapshot.selectedId]
+        : [],
+    );
     setSelectedCablePoint(
       snapshot.selectedCablePoint ? { ...snapshot.selectedCablePoint } : null,
     );
@@ -2760,6 +2836,7 @@ function App() {
   function handlePointerDown(event: PointerEvent) {
     const point = pointerFromEvent(event);
     setSelectedId(null);
+    setSelectedDeviceIds([]);
     setSelectedCablePoint(null);
 
     if (mode === "scale") {
@@ -2817,7 +2894,7 @@ function App() {
           : {}),
       };
       setDevices((current) => [...current, device]);
-      setSelectedId(device.id);
+      selectDevices([device.id]);
     }
   }
 
@@ -3027,13 +3104,24 @@ function App() {
   }
 
   function deleteSelected() {
-    if (!selectedId) return;
-    setCables((current) => current.filter((route) => route.id !== selectedId));
+    const selectedDeviceIdSet = new Set(selectedDeviceIds);
+    if (!selectedId && selectedDeviceIdSet.size === 0) return;
+    setCables((current) =>
+      selectedDeviceIdSet.size > 0
+        ? current
+        : current.filter((route) => route.id !== selectedId),
+    );
     setDevices((current) =>
       current
-        .filter((device) => device.id !== selectedId)
+        .filter((device) =>
+          selectedDeviceIdSet.size > 0
+            ? !selectedDeviceIdSet.has(device.id)
+            : device.id !== selectedId,
+        )
         .map((device) =>
-          device.sourceId === selectedId
+          (selectedDeviceIdSet.size > 0
+            ? device.sourceId && selectedDeviceIdSet.has(device.sourceId)
+            : device.sourceId === selectedId)
             ? {
                 ...device,
                 sourceMode: "auto",
@@ -3044,6 +3132,7 @@ function App() {
         ),
     );
     setSelectedId(null);
+    setSelectedDeviceIds([]);
     setSelectedCablePoint(null);
   }
 
@@ -3090,12 +3179,46 @@ function App() {
     setDevices((current) => [...current, pastedDevice]);
     setCopiedDevice(pastedDevice);
     setSelectedId(pastedDevice.id);
+    setSelectedDeviceIds([pastedDevice.id]);
     setPoppedDeviceId(pastedDevice.id);
+  }
+
+  function selectDevices(deviceIds: string[]) {
+    setSelectedDeviceIds(deviceIds);
+    setSelectedId(deviceIds[0] ?? null);
+    setSelectedCablePoint(null);
+  }
+
+  function toggleDeviceSelection(deviceId: string) {
+    setSelectedDeviceIds((currentSelection) => {
+      const currentDeviceIds =
+        currentSelection.length > 0
+          ? currentSelection
+          : selectedId && devices.some((device) => device.id === selectedId)
+            ? [selectedId]
+            : [];
+      const nextSelection = currentDeviceIds.includes(deviceId)
+        ? currentDeviceIds.filter((currentId) => currentId !== deviceId)
+        : [...currentDeviceIds, deviceId];
+      setSelectedId(nextSelection[0] ?? null);
+      setSelectedCablePoint(null);
+      return nextSelection;
+    });
   }
 
   function updateDevice(id: string, updates: Partial<Device>) {
     setDevices((current) =>
       current.map((device) => (device.id === id ? { ...device, ...updates } : device)),
+    );
+  }
+
+  function updateSelectedDevices(updates: Partial<Device>) {
+    const selectedIdSet = new Set(selectedDeviceIds);
+    if (selectedIdSet.size === 0) return;
+    setDevices((current) =>
+      current.map((device) =>
+        selectedIdSet.has(device.id) ? { ...device, ...updates } : device,
+      ),
     );
   }
 
@@ -3215,6 +3338,7 @@ function App() {
       ),
     );
     setSelectedId(routeId);
+    setSelectedDeviceIds([]);
     setSelectedCablePoint({ routeId, pointIndex: insertion.pointIndex });
     setDraggingCablePoint({ routeId, pointIndex: insertion.pointIndex });
     setMode("select");
@@ -3267,6 +3391,7 @@ function App() {
       }),
     );
     setSelectedId(routeId);
+    setSelectedDeviceIds([]);
     setSelectedCablePoint(null);
     setMode("select");
   }
@@ -3274,11 +3399,16 @@ function App() {
   const draftMeters =
     draftRoute.length > 1 && pixelsPerMeter ? routePixels(draftRoute) / pixelsPerMeter : 0;
   const selectedCableRoute = currentCables.find((route) => route.id === selectedId);
+  const selectedMultiConsumerSourceValue =
+    selectedCommonDeviceType !== "consumer"
+      ? "mixed"
+      : selectedCommonSourceSelection ?? "mixed";
 
   function beginCablePointDrag(routeId: string, event: PointerEvent<SVGCircleElement>) {
     event.stopPropagation();
     beginUndoGroup();
     setSelectedId(routeId);
+    setSelectedDeviceIds([]);
     setMode("select");
     const branchId = event.currentTarget.dataset.branchId;
     let dragPoint: DraggingCablePoint;
@@ -3456,6 +3586,222 @@ function App() {
               {pixelsPerMeter
                 ? `${unit.format(pixelsPerMeter)} px per meter`
                 : "Draw a known distance"}
+            </div>
+          </section>
+        )}
+
+        {selectedDeviceCount > 1 && (
+          <section className="tool-group editor-panel" aria-label="Selected devices">
+            <h2>{selectedDeviceCount} devices</h2>
+            <p className="source-status">
+              Common properties are applied to every selected device.
+            </p>
+
+            {(selectedCommonDeviceType === "producer" ||
+              selectedCommonDeviceType === "consumer" ||
+              selectedCommonDeviceType === "ethernetClient") && (
+              <label className="field">
+                <span>Name</span>
+                <input
+                  className="text-input"
+                  placeholder={selectedCommonName === undefined ? "Mixed" : undefined}
+                  value={selectedCommonName ?? ""}
+                  onChange={(event) =>
+                    updateSelectedDevices({ name: event.target.value })
+                  }
+                />
+              </label>
+            )}
+
+            {selectedCommonDeviceType === "powerstrip" && (
+              <label className="field">
+                <span>Desired free sockets</span>
+                <div className="input-row">
+                  <input
+                    inputMode="numeric"
+                    min="0"
+                    placeholder={selectedCommonDesiredFreeSockets === undefined ? "Mixed" : undefined}
+                    step="1"
+                    type="number"
+                    value={selectedCommonDesiredFreeSockets ?? ""}
+                    onChange={(event) =>
+                      updateSelectedDevices({
+                        desiredFreeSockets: Math.max(
+                          0,
+                          Math.floor(Number(event.target.value) || 0),
+                        ),
+                      })
+                    }
+                  />
+                  <span>free</span>
+                </div>
+              </label>
+            )}
+
+            {selectedCommonDeviceType === "producer" && (
+              <label className="field">
+                <span>Available power</span>
+                <div className="input-row">
+                  <input
+                    inputMode="decimal"
+                    min="0"
+                    placeholder={selectedCommonAvailablePowerW === undefined ? "Mixed" : undefined}
+                    step="50"
+                    type="number"
+                    value={selectedCommonAvailablePowerW ?? ""}
+                    onChange={(event) =>
+                      updateSelectedDevices({
+                        availablePowerW: Math.max(0, Number(event.target.value) || 0),
+                      })
+                    }
+                  />
+                  <span>W</span>
+                </div>
+              </label>
+            )}
+
+            {selectedCommonDeviceType === "consumer" && (
+              <>
+                <label className="field">
+                  <span>Required power</span>
+                  <div className="input-row">
+                    <input
+                      inputMode="decimal"
+                      min="0"
+                      placeholder={selectedCommonRequiredPowerW === undefined ? "Mixed" : undefined}
+                      step="10"
+                      type="number"
+                      value={selectedCommonRequiredPowerW ?? ""}
+                      onChange={(event) =>
+                        updateSelectedDevices({
+                          powerW: Math.max(0, Number(event.target.value) || 0),
+                        })
+                      }
+                    />
+                    <span>W</span>
+                  </div>
+                </label>
+                <label className="field">
+                  <span>Power source</span>
+                  <select
+                    className="select-input"
+                    value={selectedMultiConsumerSourceValue}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === "auto") {
+                        updateSelectedDevices({
+                          sourceMode: "auto",
+                          sourceType: undefined,
+                          sourceId: undefined,
+                        });
+                        return;
+                      }
+                      if (value === "none") {
+                        updateSelectedDevices({
+                          sourceMode: "manual",
+                          sourceType: undefined,
+                          sourceId: undefined,
+                        });
+                        return;
+                      }
+                      const [sourceType, sourceId] = value.split(":") as [
+                        ConsumerSourceType,
+                        string,
+                      ];
+                      updateSelectedDevices({
+                        sourceMode: "manual",
+                        sourceType,
+                        sourceId,
+                      });
+                    }}
+                  >
+                    <option disabled value="mixed">
+                      Mixed
+                    </option>
+                    <option value="auto">Auto closest source/end within 1.5 m</option>
+                    <option value="none">Unassigned</option>
+                    {powerSources
+                      .filter((source) =>
+                        selectedCommonPage !== undefined
+                          ? source.page === selectedCommonPage
+                          : source.page === pageNumber,
+                      )
+                      .map((source) => (
+                        <option key={`${source.type}:${source.id}`} value={sourceValue(source)}>
+                          {sourceLabel(source)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </>
+            )}
+
+            {selectedCommonDeviceType === "ethernetClient" && (
+              <label className="field">
+                <span>PoE required power</span>
+                <div className="input-row">
+                  <input
+                    inputMode="decimal"
+                    min="0"
+                    placeholder={selectedCommonPoePowerW === undefined ? "Mixed" : undefined}
+                    step="1"
+                    type="number"
+                    value={selectedCommonPoePowerW ?? ""}
+                    onChange={(event) =>
+                      updateSelectedDevices({
+                        poePowerW: Math.max(0, Number(event.target.value) || 0),
+                      })
+                    }
+                  />
+                  <span>W</span>
+                </div>
+              </label>
+            )}
+
+            {(selectedCommonDeviceType === "producer" ||
+              selectedCommonDeviceType === "switch" ||
+              selectedDevicesAllHaveSocketCapacity) && (
+              <label className="field">
+                <span>
+                  {selectedCommonDeviceType === "switch"
+                    ? "Ethernet sockets"
+                    : selectedCommonDeviceType === "producer"
+                      ? "Power sockets"
+                      : "Sockets / ports"}
+                </span>
+                <div className="input-row">
+                  <input
+                    inputMode="numeric"
+                    min="0"
+                    placeholder={selectedCommonSocketCapacity === undefined ? "Mixed" : undefined}
+                    step="1"
+                    type="number"
+                    value={selectedCommonSocketCapacity ?? ""}
+                    onChange={(event) =>
+                      updateSelectedDevices({
+                        socketCapacity: Math.max(
+                          0,
+                          Math.floor(Number(event.target.value) || 0),
+                        ),
+                      })
+                    }
+                  />
+                  <span>{selectedCommonDeviceType === "switch" ? "ports" : "outlets"}</span>
+                </div>
+              </label>
+            )}
+
+            <div className="compact-segmented">
+              {(["top", "right", "bottom", "left"] as LabelPosition[]).map((position) => (
+                <button
+                  className={selectedCommonLabelPosition === position ? "active" : ""}
+                  key={position}
+                  type="button"
+                  onClick={() => updateSelectedDevices({ labelPosition: position })}
+                >
+                  {position[0].toUpperCase() + position.slice(1)}
+                </button>
+              ))}
             </div>
           </section>
         )}
@@ -3911,7 +4257,11 @@ function App() {
               <Undo2 aria-hidden="true" />
               Undo
             </button>
-            <button type="button" disabled={!selectedId} onClick={deleteSelected}>
+            <button
+              type="button"
+              disabled={!selectedId && selectedDeviceIds.length === 0}
+              onClick={deleteSelected}
+            >
               <Trash2 aria-hidden="true" />
               Delete
             </button>
@@ -4018,6 +4368,7 @@ function App() {
                     }
                     event.stopPropagation();
                     setSelectedId(route.id);
+                    setSelectedDeviceIds([]);
                     setSelectedCablePoint(null);
                     setMode("select");
                   }}
@@ -4166,7 +4517,7 @@ function App() {
                   <g
                     className={[
                       "device",
-                      selectedId === device.id ? "active" : "",
+                      selectedDeviceIds.includes(device.id) ? "active" : "",
                       poppedDeviceId === device.id ? "pop" : "",
                       animateOrphans && orphanDeviceIds.has(device.id) ? "orphan" : "",
                     ]
@@ -4184,8 +4535,13 @@ function App() {
                         );
                         return;
                       }
+                      if (event.metaKey || event.ctrlKey) {
+                        toggleDeviceSelection(device.id);
+                        setMode("select");
+                        return;
+                      }
                       beginUndoGroup();
-                      setSelectedId(device.id);
+                      selectDevices([device.id]);
                       setDraggingDevice({
                         deviceId: device.id,
                         startPoint: device.point,
