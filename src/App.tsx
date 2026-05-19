@@ -144,6 +144,7 @@ type FlowPath = {
   pathData: string;
   activeColor: string;
   inactiveColor: string;
+  reuseAutoSourceId?: string;
   usesDisplayCoordinates?: boolean;
   segments?: FlowPathSegment[];
 };
@@ -920,6 +921,10 @@ function sourceValue(source?: Pick<ConsumerSource, "type" | "id">) {
   return source ? `${source.type}:${source.id}` : "none";
 }
 
+function autoSourceLinkId(consumerId: string, source: Pick<ConsumerSource, "type" | "id">) {
+  return `${consumerId}-${source.type}-${source.id}`;
+}
+
 function sourceLabel(source?: ConsumerSource) {
   return source?.label ?? "Unassigned";
 }
@@ -971,10 +976,6 @@ function sourceArcPixels(start: Point, end: Point) {
     previous = point;
   }
   return length;
-}
-
-function reversedSourceArcPath(start: Point, end: Point) {
-  return sourceArcPathThroughControl(end, sourceArcControl(start, end), start);
 }
 
 function samePoint(first: Point, second: Point) {
@@ -2428,20 +2429,15 @@ function App() {
         });
       }
     };
-    const addPathData = (
-      id: string,
-      pathData: string,
-      cableType: CableType,
-      usesDisplayCoordinates = false,
-      startRatio = 0,
-    ) => {
-      if (pathData) {
-        const fallbackColors =
-          cableType === "power"
-            ? flowColorsAtRatio(startRatio)
-            : flowColorsForCable(cableTypes[cableType].colorStart);
-        paths.push({ id, pathData, usesDisplayCoordinates, ...fallbackColors });
-      }
+    const addAutoSourceFlow = (consumerId: string, source: ConsumerSource) => {
+      const reuseAutoSourceId = autoSourceLinkId(consumerId, source);
+      paths.push({
+        id: `auto-source-${reuseAutoSourceId}`,
+        pathData: "",
+        activeColor: "",
+        inactiveColor: "",
+        reuseAutoSourceId,
+      });
     };
     const addRouteToSelectedDevice = (
       route: CableRoute,
@@ -2515,17 +2511,8 @@ function App() {
         const source = assignment?.source;
         const targetPoint = assignment?.targetPoint;
         if (!source || !targetPoint) return;
-        const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
         if (source.type === "producer") {
-          addPathData(
-            `${idPrefix}-auto-${source.id}`,
-            sourceArcPath(
-              scalePoint(source.point, viewScale),
-              scalePoint(targetDevice.point, viewScale),
-            ),
-            "power",
-            true,
-          );
+          addAutoSourceFlow(targetDevice.id, source);
           return;
         }
         if (source.type === "powerstrip") {
@@ -2535,17 +2522,7 @@ function App() {
             nextVisitedDeviceIds,
             visitedRouteIds,
           );
-          const sourceOffsetPx = powerPathPixelsToPowerstripWithAuto(source.id) ?? 0;
-          addPathData(
-            `${idPrefix}-auto-${source.id}`,
-            sourceArcPath(
-              scalePoint(source.point, viewScale),
-              scalePoint(targetDevice.point, viewScale),
-            ),
-            "power",
-            true,
-            maxPowerLengthPx ? sourceOffsetPx / maxPowerLengthPx : 0,
-          );
+          addAutoSourceFlow(targetDevice.id, source);
           return;
         }
         if (source.route) {
@@ -2561,24 +2538,13 @@ function App() {
           if (!targetEndpoint || !sourceEndpoint) return;
           const sourceOffsetPx =
             upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
-          const arcStartPixels =
-            upstreamPowerPathPixelsToRouteEndpoint(source.route, targetEndpoint, devicesById, cables) ?? 0;
           addPath(
             `${idPrefix}-auto-route-${source.route.id}`,
             routePathBetweenEndpoints(source.route, sourceEndpoint, targetEndpoint),
             "power",
             sourceOffsetPx,
           );
-          addPathData(
-            `${idPrefix}-auto-route-arc-${source.route.id}`,
-            sourceArcPath(
-              scalePoint(targetPoint, viewScale),
-              scalePoint(targetDevice.point, viewScale),
-            ),
-            "power",
-            true,
-            maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
-          );
+          addAutoSourceFlow(targetDevice.id, source);
           if (
             sourceEndpoint.deviceId &&
             devicesById.get(sourceEndpoint.deviceId)?.type === "powerstrip"
@@ -2655,28 +2621,14 @@ function App() {
 
       [...consumerSourceAssignments, ...powerstripSourceAssignments]
         .filter(
-          (assignment) =>
+          (assignment): assignment is ResolvedConsumerSource & { source: ConsumerSource } =>
             (assignment.source?.type === "powerstrip" ||
               assignment.source?.type === "producer") &&
             assignment.source.id === sourceDeviceId &&
-            assignment.targetPoint,
+            Boolean(assignment.targetPoint),
         )
         .forEach((assignment) => {
-          const sourceOffsetPx =
-            sourceDevice.type === "powerstrip"
-              ? powerPathPixelsToPowerstripWithAuto(sourceDeviceId) ?? 0
-              : upstreamPowerPathPixelsToDevice(sourceDeviceId, devicesById, cables) ?? 0;
-          const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
-          addPathData(
-            `${idPrefix}-arc-${assignment.consumer.id}`,
-            sourceArcPath(
-              scalePoint(sourceDevice.point, viewScale),
-              scalePoint(assignment.consumer.point, viewScale),
-            ),
-            "power",
-            true,
-            maxPowerLengthPx ? sourceOffsetPx / maxPowerLengthPx : 0,
-          );
+          addAutoSourceFlow(assignment.consumer.id, assignment.source);
           if (assignment.consumer.type === "powerstrip") {
             addPowerFlowFromDevice(
               assignment.consumer.id,
@@ -2746,30 +2698,13 @@ function App() {
       if (!targetEndpoint || !sourceEndpoint) return;
       const sourceOffsetPx =
         upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
-      const arcStartPixels =
-        upstreamPowerPathPixelsToRouteEndpoint(
-          assignment.source.route,
-          targetEndpoint,
-          devicesById,
-          cables,
-        ) ?? 0;
-      const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
       addPath(
         `power-source-assignment-${assignment.source.route.id}-${assignment.consumer.id}`,
         routePathBetweenEndpoints(assignment.source.route, sourceEndpoint, targetEndpoint),
         "power",
         sourceOffsetPx,
       );
-      addPathData(
-        `power-source-assignment-arc-${assignment.consumer.id}`,
-        sourceArcPath(
-          scalePoint(targetEndpoint.point, viewScale),
-          scalePoint(assignment.consumer.point, viewScale),
-        ),
-        "power",
-        true,
-        maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
-      );
+      addAutoSourceFlow(assignment.consumer.id, assignment.source);
     };
 
     if (selectedDevice.type === "consumer") {
@@ -2781,29 +2716,10 @@ function App() {
         const source = selectedConsumerAssignment?.source;
         const targetPoint = selectedConsumerAssignment?.targetPoint;
         if (source && targetPoint && source.type === "producer") {
-          addPathData(
-            `power-source-arc-existing-${source.id}-${selectedDevice.id}`,
-            reversedSourceArcPath(
-              scalePoint(selectedDevice.point, viewScale),
-              scalePoint(source.point, viewScale),
-            ),
-            "power",
-            true,
-          );
+          addAutoSourceFlow(selectedDevice.id, source);
         } else if (source && targetPoint && source.type === "powerstrip") {
           addPowerFlowToDevice(source.id, `power-strip-feed-${source.id}`);
-          const arcStartPixels = upstreamPowerPathPixelsToDevice(source.id, devicesById, cables) ?? 0;
-          const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
-          addPathData(
-            `power-strip-arc-existing-${source.id}-${selectedDevice.id}`,
-            reversedSourceArcPath(
-              scalePoint(selectedDevice.point, viewScale),
-              scalePoint(source.point, viewScale),
-            ),
-            "power",
-            true,
-            maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
-          );
+          addAutoSourceFlow(selectedDevice.id, source);
         } else if (source && targetPoint && source.type === "powerCable" && source.route) {
           const targetEndpoint = nearestRouteEndpoint(source.route, targetPoint);
           const sourceEndpoint =
@@ -2816,9 +2732,6 @@ function App() {
                 )
               : preferredPowerSourceEndpoint(source.route, devicesById);
           if (targetEndpoint && sourceEndpoint) {
-            const arcStartPixels =
-              upstreamPowerPathPixelsToRouteEndpoint(source.route, targetEndpoint, devicesById, cables) ?? 0;
-            const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
             const sourceOffsetPx =
               upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
             addPath(
@@ -2827,16 +2740,7 @@ function App() {
               "power",
               sourceOffsetPx,
             );
-            addPathData(
-              `power-cable-arc-existing-${source.route.id}-${selectedDevice.id}`,
-              reversedSourceArcPath(
-                scalePoint(selectedDevice.point, viewScale),
-                scalePoint(targetEndpoint.point, viewScale),
-              ),
-              "power",
-              true,
-              maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
-            );
+            addAutoSourceFlow(selectedDevice.id, source);
             if (
               sourceEndpoint.deviceId &&
               devicesById.get(sourceEndpoint.deviceId)?.type === "powerstrip"
@@ -2917,13 +2821,20 @@ function App() {
     consumerSourceAssignments,
     devicesById,
     pixelsPerMeter,
-    powerPathPixelsToPowerstripWithAuto,
     powerstripSourceAssignments,
     selectedConsumerAssignment,
     selectedDevice,
     selectedEthernetClientAssignment,
-    viewScale,
   ]);
+  const selectedAutoSourceFlowIds = useMemo(
+    () =>
+      new Set(
+        selectedFlowPaths
+          .map((path) => path.reuseAutoSourceId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    [selectedFlowPaths],
+  );
   const draftRoute = useMemo(
     () =>
       mode === "cable" && routeDraft.length > 0 && cursorPoint
@@ -5296,14 +5207,17 @@ function App() {
                 ...currentConsumerSourceAssignments,
                 ...currentPowerstripSourceAssignments,
               ]
-                .filter(
-                  (assignment) =>
-                    assignment.autoAssigned &&
-                    assignment.source &&
-                    assignment.targetPoint &&
-                    assignment.consumer.id !== selectedDevice?.id &&
+                .filter((assignment) => {
+                  if (!assignment.autoAssigned || !assignment.source || !assignment.targetPoint) {
+                    return false;
+                  }
+                  const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
+                  const isFlowing = selectedAutoSourceFlowIds.has(linkId);
+                  return (
+                    (assignment.consumer.id !== selectedDevice?.id || isFlowing) &&
                     !(
                       selectedDevice?.type === "producer" &&
+                      !isFlowing &&
                       (assignment.source.type === "producer"
                         ? assignment.source.id === selectedDevice.id
                         : assignment.source.type === "powerstrip"
@@ -5315,8 +5229,9 @@ function App() {
                               devicesById,
                               cables,
                             ) === selectedDevice.id)
-                    ),
-                )
+                    )
+                  );
+                })
                 .map((assignment) => {
                   const startPoint = assignment.consumer.point;
                   const endPoint = assignment.targetPoint as Point;
@@ -5327,12 +5242,17 @@ function App() {
                   const maxLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
                   const startRatio = maxLengthPx ? upstreamPixels / maxLengthPx : 0;
                   const endRatio = maxLengthPx ? (upstreamPixels + arcPixels) / maxLengthPx : 0;
+                  const linkId = autoSourceLinkId(
+                    assignment.consumer.id,
+                    assignment.source as ConsumerSource,
+                  );
                   return (
                     <AutoSourceLink
                       end={end}
                       endRatio={endRatio}
-                      id={`${assignment.consumer.id}-${assignment.source?.type}-${assignment.source?.id}`}
-                      key={`${assignment.consumer.id}-${assignment.source?.type}-${assignment.source?.id}`}
+                      flowing={selectedAutoSourceFlowIds.has(linkId)}
+                      id={linkId}
+                      key={linkId}
                       pathData={sourceArcPath(start, end)}
                       start={start}
                       startRatio={startRatio}
@@ -5359,7 +5279,9 @@ function App() {
                 );
               })}
 
-              {selectedDevice?.page === pageNumber && selectedFlowPaths.map((path) => (
+              {selectedDevice?.page === pageNumber && selectedFlowPaths
+                .filter((path) => !path.reuseAutoSourceId)
+                .map((path) => (
                   <FlowPathView
                     activeColor={path.activeColor}
                     id={`flow-${path.id}`}
@@ -5716,6 +5638,7 @@ function CableRouteEditPointLayer({
 function AutoSourceLink({
   end,
   endRatio,
+  flowing = false,
   id,
   pathData,
   start,
@@ -5723,6 +5646,7 @@ function AutoSourceLink({
 }: {
   end: Point;
   endRatio: number;
+  flowing?: boolean;
   id: string;
   pathData: string;
   start: Point;
@@ -5745,10 +5669,20 @@ function AutoSourceLink({
         </linearGradient>
       </defs>
       <path
-        className="auto-source-link"
+        className={flowing ? "auto-source-link flowing" : "auto-source-link"}
         d={pathData}
         style={{ stroke: `url(#${gradientId})` }}
-      />
+      >
+        {flowing && (
+          <animate
+            attributeName="stroke-dashoffset"
+            dur="1.2s"
+            from="0"
+            repeatCount="indefinite"
+            to={String(-flowDashCyclePx)}
+          />
+        )}
+      </path>
     </g>
   );
 }

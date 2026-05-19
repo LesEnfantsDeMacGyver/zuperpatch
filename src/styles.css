@@ -698,6 +698,11 @@ h2 {
   stroke-width: 2.5;
 }
 
+.auto-source-link.flowing {
+  stroke-dasharray: 12 15;
+  stroke-width: 4.4;
+}
+
 .ethernet-attachment {
   pointer-events: none;
 }
