@@ -814,7 +814,12 @@ function socketCapacityForDevice(device: Device) {
 
 function canCableConnectDevice(cableType: CableType, deviceType: DeviceType) {
   if (cableType === "power") {
-    return deviceType === "producer" || deviceType === "powerstrip" || deviceType === "consumer";
+    return (
+      deviceType === "producer" ||
+      deviceType === "powerstrip" ||
+      deviceType === "consumer" ||
+      deviceType === "switch"
+    );
   }
   if (cableType === "ethernet") {
     return deviceType === "switch" || deviceType === "ethernetClient" || deviceType === "consumer";
@@ -839,7 +844,9 @@ function canCableConnectDeviceTypes(
       deviceTypes === "consumer:powerstrip" ||
       deviceTypes === "consumer:producer" ||
       deviceTypes === "powerstrip:powerstrip" ||
-      deviceTypes === "powerstrip:producer"
+      deviceTypes === "powerstrip:producer" ||
+      deviceTypes === "powerstrip:switch" ||
+      deviceTypes === "producer:switch"
     );
   }
   if (cableType === "ethernet") {
@@ -919,7 +926,9 @@ function canAddCablePointForDevice(
   draftDeviceIds: Array<string | undefined>,
 ) {
   if (!canCableConnectDevice(cableType, device.type)) return false;
-  if (cableType !== "power" || device.type !== "consumer") return true;
+  if (cableType !== "power" || (device.type !== "consumer" && device.type !== "switch")) {
+    return true;
+  }
   const existingAttachments = deviceCableAttachmentCount(device.id, routes, cableType);
   const draftAttachments = draftDeviceIds.filter((deviceId) => deviceId === device.id).length;
   return existingAttachments + draftAttachments === 0;
@@ -1186,7 +1195,7 @@ function powerCableSourcePoints(route: CableRoute, devices: Device[]) {
     .filter((endpoint) => {
       if (!endpoint.deviceId) return true;
       const endpointDevice = devices.find((device) => device.id === endpoint.deviceId);
-      return endpointDevice?.type !== "consumer";
+      return endpointDevice?.type !== "consumer" && endpointDevice?.type !== "switch";
     })
     .map((endpoint) => endpoint.point);
 }
@@ -2085,18 +2094,23 @@ function App() {
   });
   const producers = devices.filter((device) => device.type === "producer");
   const consumers = devices.filter((device) => device.type === "consumer");
+  const switches = devices.filter((device) => device.type === "switch");
   const ethernetClients = devices.filter((device) => device.type === "ethernetClient");
+  const powerLoadDevices = useMemo(
+    () => devices.filter((device) => device.type === "consumer" || device.type === "switch"),
+    [devices],
+  );
   const devicesById = useMemo(
     () => new Map(devices.map((device) => [device.id, device])),
     [devices],
   );
   const directPowerConsumerAttachments = useMemo(
     () =>
-      consumers.map((consumer) => ({
+      powerLoadDevices.map((consumer) => ({
         consumer,
         attachments: resolveDeviceCableAttachments(consumer, cables, "power"),
       })),
-    [cables, consumers],
+    [cables, powerLoadDevices],
   );
   const directlyPoweredConsumerIds = useMemo(
     () =>
@@ -2940,6 +2954,7 @@ function App() {
         }
       }
     } else if (selectedDevice.type === "switch") {
+      addPowerFlowToDevice(selectedDevice.id, "power-switch");
       resolveDeviceCableAttachments(selectedDevice, cables, "ethernet").forEach((attachment) => {
         addRouteFromDevice(
           attachment.route,
@@ -3012,6 +3027,33 @@ function App() {
     });
   }, [activeCable, cables, draftRoute, pixelsPerMeter]);
 
+  const producerIdForDirectPowerDevice = useCallback(
+    (deviceId: string) => {
+      const directAttachment = directPowerConsumerAttachments.find(
+        (assignment) => assignment.consumer.id === deviceId,
+      );
+      for (const attachment of directAttachment?.attachments ?? []) {
+        const producerId = upstreamProducerIdForPowerRoute(
+          attachment.route,
+          devicesById,
+          cables,
+        );
+        if (producerId) return producerId;
+      }
+      return undefined;
+    },
+    [cables, devicesById, directPowerConsumerAttachments],
+  );
+
+  const switchRequiredPowerW = useCallback(
+    (switchDevice: Device) =>
+      ethernetSwitchPoeStats.find((stats) => stats.switchId === switchDevice.id)
+        ?.totalRequiredPowerW ??
+      switchDevice.powerW ??
+      0,
+    [ethernetSwitchPoeStats],
+  );
+
   const powerStats = useMemo(() => {
     const devicesById = new Map(devices.map((device) => [device.id, device]));
     const producerIdForAssignment = (assignment: ResolvedConsumerSource) => {
@@ -3031,40 +3073,33 @@ function App() {
         ? upstreamProducerIdForPowerRoute(route, devicesById, cables)
         : undefined;
     };
-    const producerIdForDirectConsumer = (consumerId: string) => {
-      const directAttachment = directPowerConsumerAttachments.find(
-        (assignment) => assignment.consumer.id === consumerId,
-      );
-      for (const attachment of directAttachment?.attachments ?? []) {
-        const producerId = upstreamProducerIdForPowerRoute(
-          attachment.route,
-          devicesById,
-          cables,
-        );
-        if (producerId) return producerId;
-      }
-      return undefined;
-    };
-
     return producers.map((producer) => {
-      const assignedConsumerIds = new Set<string>();
+      const assignedPowerLoadIds = new Set<string>();
       consumerSourceAssignments.forEach((assignment) => {
         if (producerIdForAssignment(assignment) === producer.id) {
-          assignedConsumerIds.add(assignment.consumer.id);
+          assignedPowerLoadIds.add(assignment.consumer.id);
         }
       });
       directPowerConsumerAttachments.forEach((assignment) => {
-        if (producerIdForDirectConsumer(assignment.consumer.id) === producer.id) {
-          assignedConsumerIds.add(assignment.consumer.id);
+        if (producerIdForDirectPowerDevice(assignment.consumer.id) === producer.id) {
+          assignedPowerLoadIds.add(assignment.consumer.id);
         }
       });
       const assignedConsumers = consumers.filter((consumer) =>
-        assignedConsumerIds.has(consumer.id),
+        assignedPowerLoadIds.has(consumer.id),
       );
-      const usedW = assignedConsumers.reduce(
+      const assignedSwitches = switches.filter((switchDevice) =>
+        assignedPowerLoadIds.has(switchDevice.id),
+      );
+      const consumerLoadW = assignedConsumers.reduce(
         (sum, consumer) => sum + (consumer.powerW ?? 0),
         0,
       );
+      const switchLoadW = assignedSwitches.reduce(
+        (sum, switchDevice) => sum + switchRequiredPowerW(switchDevice),
+        0,
+      );
+      const usedW = consumerLoadW + switchLoadW;
       const capacityW = producer.availablePowerW ?? 0;
       const electricalCableCount =
         producerPowerCableAttachments.find(
@@ -3093,6 +3128,8 @@ function App() {
         remainingW: capacityW - usedW,
         percent: capacityW > 0 ? (usedW / capacityW) * 100 : 0,
         consumerCount: assignedConsumers.length,
+        loadCount: assignedConsumers.length + assignedSwitches.length,
+        switchCount: assignedSwitches.length,
         electricalCableCount,
         socketUsage,
         socketCapacity,
@@ -3106,20 +3143,33 @@ function App() {
     consumers,
     devices,
     directPowerConsumerAttachments,
+    producerIdForDirectPowerDevice,
     producerIdForPowerstripWithAuto,
     powerstripSourceAssignments,
     producerPowerCableAttachments,
     producers,
+    switchRequiredPowerW,
+    switches,
   ]);
 
   const unassignedConsumers = consumerSourceAssignments.filter(
     (assignment) =>
       !assignment.source && !directlyPoweredConsumerIds.has(assignment.consumer.id),
   );
-  const unassignedLoadW = unassignedConsumers.reduce(
+  const unassignedConsumerLoadW = unassignedConsumers.reduce(
     (sum, assignment) => sum + (assignment.consumer.powerW ?? 0),
     0,
   );
+  const unassignedSwitches = switches.filter(
+    (switchDevice) => !producerIdForDirectPowerDevice(switchDevice.id),
+  );
+  const unassignedSwitchLoadW = unassignedSwitches.reduce(
+    (sum, switchDevice) => sum + switchRequiredPowerW(switchDevice),
+    0,
+  );
+  const unassignedLoadW = unassignedConsumerLoadW + unassignedSwitchLoadW;
+  const unassignedPowerLoadCount = unassignedConsumers.length + unassignedSwitches.length;
+
   const orphanDeviceIds = useMemo(() => {
     const orphanIds = new Set<string>();
     const assignmentHasPowerSource = (assignment: ResolvedConsumerSource | undefined) => {
@@ -3146,13 +3196,8 @@ function App() {
         consumerSourceAssignments.find((assignment) => assignment.consumer.id === consumer.id),
       );
     };
-    const ethernetSwitchCableCounts = new Map<string, number>();
-    ethernetSwitchAttachments.forEach((attachment) => {
-      ethernetSwitchCableCounts.set(
-        attachment.device.id,
-        (ethernetSwitchCableCounts.get(attachment.device.id) ?? 0) + 1,
-      );
-    });
+    const switchHasPowerSource = (switchDevice: Device) =>
+      Boolean(producerIdForDirectPowerDevice(switchDevice.id));
     const ethernetClientCableIds = new Set(
       ethernetClientAttachments.map((attachment) => attachment.device.id),
     );
@@ -3195,7 +3240,7 @@ function App() {
       } else if (device.type === "consumer") {
         connected = consumerHasPowerSource(device);
       } else if (device.type === "switch") {
-        connected = (ethernetSwitchCableCounts.get(device.id) ?? 0) > 0;
+        connected = switchHasPowerSource(device);
       } else if (device.type === "ethernetClient") {
         connected = ethernetClientCableIds.has(device.id);
       }
@@ -3211,7 +3256,7 @@ function App() {
     devicesById,
     directPowerConsumerAttachments,
     ethernetClientAttachments,
-    ethernetSwitchAttachments,
+    producerIdForDirectPowerDevice,
     producerIdForPowerstripWithAuto,
     powerstripSourceAssignments,
     producerPowerCableAttachments,
@@ -3635,11 +3680,11 @@ function App() {
         } connected; ${powerLabel(source.capacityW)} available`,
       );
     });
-    if (unassignedConsumers.length > 0) {
+    if (unassignedPowerLoadCount > 0) {
       addItem(
-        "Unassigned power consumers",
-        integerUnit.format(unassignedConsumers.length),
-        `${powerLabel(unassignedLoadW)} total load not assigned to a source`,
+        "Unassigned power loads",
+        integerUnit.format(unassignedPowerLoadCount),
+        `${powerLabel(unassignedLoadW)} total load not connected to a powered electrical path`,
       );
     }
 
@@ -4192,7 +4237,7 @@ function App() {
       targetDevice &&
       (!canAddCablePointForDevice(activeCable, targetDevice, cables, routeDraftDeviceIds) ||
         (activeCable === "power" &&
-          targetDevice.type === "consumer" &&
+          (targetDevice.type === "consumer" || targetDevice.type === "switch") &&
           directlyPoweredConsumerIds.has(targetDevice.id)))
     ) {
       abortCableDraft();
@@ -4245,7 +4290,7 @@ function App() {
     }
     if (
       activeCable === "power" &&
-      device.type === "consumer" &&
+      (device.type === "consumer" || device.type === "switch") &&
       directlyPoweredConsumerIds.has(device.id)
     ) {
       return undefined;
@@ -5730,8 +5775,8 @@ function App() {
                     <dd>{powerLabel(producer.remainingW)}</dd>
                   </div>
                   <div>
-                    <dt>Consumers</dt>
-                    <dd>{producer.consumerCount}</dd>
+                    <dt>Powered loads</dt>
+                    <dd>{producer.loadCount}</dd>
                   </div>
                   <div>
                     <dt>Electrical cables</dt>
@@ -5759,11 +5804,11 @@ function App() {
                 </p>
               </section>
             ))}
-            {unassignedConsumers.length > 0 && (
+            {unassignedPowerLoadCount > 0 && (
               <section className="stat warning">
                 <div className="stat-head">
                   <span className="swatch unassigned-swatch" />
-                  <strong>Unassigned consumers</strong>
+                  <strong>Unassigned power loads</strong>
                 </div>
                 <dl>
                   <div>
@@ -5771,11 +5816,11 @@ function App() {
                     <dd>{powerLabel(unassignedLoadW)}</dd>
                   </div>
                   <div>
-                    <dt>Consumers</dt>
-                    <dd>{unassignedConsumers.length}</dd>
+                    <dt>Loads</dt>
+                    <dd>{unassignedPowerLoadCount}</dd>
                   </div>
                 </dl>
-                <p>Assign these consumers to a power source to include them in load tracking.</p>
+                <p>Connect these devices to a powered electrical path to include them in load tracking.</p>
               </section>
             )}
           </div>
