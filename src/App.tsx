@@ -720,6 +720,59 @@ function closestCablePointSnap(
     .sort((a, b) => a.distancePx - b.distancePx)[0]?.point;
 }
 
+function adjacentCablePointsForReference(route: CableRoute, reference: DraggingCablePoint) {
+  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
+    const branch = route.branches?.find(
+      (currentBranch) => currentBranch.id === reference.branchId,
+    );
+    if (!branch) return [];
+    return [
+      reference.branchPointIndex === 0
+        ? route.points[route.points.length - 1]
+        : branch.points[reference.branchPointIndex - 1],
+      branch.points[reference.branchPointIndex + 1],
+    ].filter((point): point is Point => Boolean(point));
+  }
+  if (reference.pointIndex === undefined) return [];
+  return [
+    route.points[reference.pointIndex - 1],
+    route.points[reference.pointIndex + 1],
+    ...(reference.pointIndex === route.points.length - 1
+      ? (route.branches ?? []).map((branch) => branch.points[0])
+      : []),
+  ].filter((point): point is Point => Boolean(point));
+}
+
+function snapIntermediateCablePointToAxis(
+  route: CableRoute,
+  reference: DraggingCablePoint,
+  target: Point,
+  viewScale: number,
+) {
+  if (isEndpointCablePoint(route, reference)) return target;
+  const snapDistance = cablePointSnapRadiusPx / viewScale;
+  const anchors = adjacentCablePointsForReference(route, reference);
+  const xCandidate = anchors
+    .map((anchor) => ({ anchor, distancePx: Math.abs(target.x - anchor.x) }))
+    .filter((candidate) => candidate.distancePx <= snapDistance)
+    .sort((a, b) => a.distancePx - b.distancePx)[0];
+  const yCandidate = anchors
+    .map((anchor) => ({ anchor, distancePx: Math.abs(target.y - anchor.y) }))
+    .filter((candidate) => candidate.distancePx <= snapDistance)
+    .sort((a, b) => a.distancePx - b.distancePx)[0];
+
+  if (xCandidate && yCandidate && xCandidate.anchor === yCandidate.anchor) {
+    return xCandidate.distancePx <= yCandidate.distancePx
+      ? { ...target, x: xCandidate.anchor.x }
+      : { ...target, y: yCandidate.anchor.y };
+  }
+
+  return {
+    x: xCandidate ? xCandidate.anchor.x : target.x,
+    y: yCandidate ? yCandidate.anchor.y : target.y,
+  };
+}
+
 function endpointDeviceIdsForDraft(deviceIds: Array<string | undefined>) {
   return {
     start: deviceIds[0],
@@ -4321,6 +4374,13 @@ function App() {
               point,
             );
           }
+        } else {
+          editedPoint = snapIntermediateCablePointToAxis(
+            activeRoute,
+            draggingCablePoint,
+            editedPoint,
+            viewScale,
+          );
         }
 
         const endpointDevice = isEndpointCablePoint(activeRoute, draggingCablePoint)
