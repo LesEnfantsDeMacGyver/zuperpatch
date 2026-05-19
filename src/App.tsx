@@ -886,6 +886,25 @@ function sourceArcPath(start: Point, end: Point) {
   return sourceArcPathThroughControl(start, sourceArcControl(start, end), end);
 }
 
+function sourceArcPixels(start: Point, end: Point) {
+  const control = sourceArcControl(start, end);
+  const pointAt = (t: number) => {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * start.x + 2 * mt * t * control.x + t * t * end.x,
+      y: mt * mt * start.y + 2 * mt * t * control.y + t * t * end.y,
+    };
+  };
+  let length = 0;
+  let previous = start;
+  for (let index = 1; index <= 16; index += 1) {
+    const point = pointAt(index / 16);
+    length += distance(previous, point);
+    previous = point;
+  }
+  return length;
+}
+
 function reversedSourceArcPath(start: Point, end: Point) {
   return sourceArcPathThroughControl(end, sourceArcControl(start, end), start);
 }
@@ -1120,6 +1139,122 @@ function upstreamProducerIdForPowerstrip(
   }
 
   return undefined;
+}
+
+function upstreamEndpointForPowerRoute(
+  route: CableRoute,
+  targetDeviceId: string,
+  devicesById: Map<string, Device>,
+  routes: CableRoute[],
+) {
+  const endpoints = routeEndpointReferences(route);
+  const targetEndpoint = endpoints.find((endpoint) => endpoint.deviceId === targetDeviceId);
+  if (!targetEndpoint) return undefined;
+  const candidateEndpoints = endpoints.filter(
+    (endpoint) => endpoint.deviceId !== targetDeviceId,
+  );
+  const producerEndpoint = candidateEndpoints.find(
+    (endpoint) =>
+      endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "producer",
+  );
+  if (producerEndpoint) return producerEndpoint;
+  return candidateEndpoints.find((endpoint) => {
+    if (!endpoint.deviceId) return true;
+    if (devicesById.get(endpoint.deviceId)?.type !== "powerstrip") return false;
+    return Boolean(
+      upstreamProducerIdForPowerstrip(
+        endpoint.deviceId,
+        devicesById,
+        routes,
+        new Set([route.id]),
+        new Set([targetDeviceId]),
+      ),
+    );
+  });
+}
+
+function upstreamPowerPathPixelsToEndpoint(
+  endpoint: RouteEndpointReference,
+  devicesById: Map<string, Device>,
+  routes: CableRoute[],
+  visitedDeviceIds = new Set<string>(),
+  visitedRouteIds = new Set<string>(),
+): number | undefined {
+  if (!endpoint.deviceId) return 0;
+  const device = devicesById.get(endpoint.deviceId);
+  if (!device) return undefined;
+  if (device.type === "producer") return 0;
+  return upstreamPowerPathPixelsToDevice(
+    endpoint.deviceId,
+    devicesById,
+    routes,
+    visitedDeviceIds,
+    visitedRouteIds,
+  );
+}
+
+function upstreamPowerPathPixelsToRouteEndpoint(
+  route: CableRoute,
+  targetEndpoint: RouteEndpointReference,
+  devicesById: Map<string, Device>,
+  routes: CableRoute[],
+) {
+  const endpointDevice = targetEndpoint.deviceId
+    ? devicesById.get(targetEndpoint.deviceId)
+    : undefined;
+  if (endpointDevice?.type === "producer") return 0;
+  if (endpointDevice?.type === "powerstrip") {
+    return upstreamPowerPathPixelsToDevice(targetEndpoint.deviceId as string, devicesById, routes);
+  }
+
+  const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById);
+  if (!sourceEndpoint) return undefined;
+  const sourcePixels = upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, routes);
+  if (sourcePixels === undefined) return undefined;
+  return sourcePixels + routePixels(routePathBetweenEndpoints(route, sourceEndpoint, targetEndpoint));
+}
+
+function upstreamPowerPathPixelsToDevice(
+  deviceId: string,
+  devicesById: Map<string, Device>,
+  routes: CableRoute[],
+  visitedDeviceIds = new Set<string>(),
+  visitedRouteIds = new Set<string>(),
+): number | undefined {
+  if (visitedDeviceIds.has(deviceId)) return undefined;
+  const device = devicesById.get(deviceId);
+  if (!device) return undefined;
+  if (device.type === "producer") return 0;
+
+  const nextVisitedDeviceIds = new Set(visitedDeviceIds);
+  nextVisitedDeviceIds.add(deviceId);
+  return resolveDeviceCableAttachments(device, routes, "power")
+    .map((attachment) => {
+      if (visitedRouteIds.has(attachment.route.id)) return undefined;
+      const sourceEndpoint = upstreamEndpointForPowerRoute(
+        attachment.route,
+        deviceId,
+        devicesById,
+        routes,
+      );
+      const targetEndpoint = endpointForDevice(attachment.route, deviceId);
+      if (!sourceEndpoint || !targetEndpoint) return undefined;
+      const nextVisitedRouteIds = new Set(visitedRouteIds);
+      nextVisitedRouteIds.add(attachment.route.id);
+      const sourcePixels = upstreamPowerPathPixelsToEndpoint(
+        sourceEndpoint,
+        devicesById,
+        routes,
+        nextVisitedDeviceIds,
+        nextVisitedRouteIds,
+      );
+      if (sourcePixels === undefined) return undefined;
+      return sourcePixels + routePixels(
+        routePathBetweenEndpoints(attachment.route, sourceEndpoint, targetEndpoint),
+      );
+    })
+    .filter((pixels): pixels is number => pixels !== undefined)
+    .sort((a, b) => a - b)[0];
 }
 
 function closestCompatibleDeviceForCablePoint(
@@ -1706,6 +1841,10 @@ function App() {
   const producers = devices.filter((device) => device.type === "producer");
   const consumers = devices.filter((device) => device.type === "consumer");
   const ethernetClients = devices.filter((device) => device.type === "ethernetClient");
+  const devicesById = useMemo(
+    () => new Map(devices.map((device) => [device.id, device])),
+    [devices],
+  );
   const directPowerConsumerAttachments = useMemo(
     () =>
       consumers.map((consumer) => ({
@@ -1927,9 +2066,22 @@ function App() {
       : undefined;
   const selectedPowerstripSocketCapacity =
     selectedDevice?.type === "powerstrip" ? socketCapacityForDevice(selectedDevice) : 0;
+  const powerPathPixelsToAssignmentSource = (assignment: ResolvedConsumerSource) => {
+    const source = assignment.source;
+    if (!source) return 0;
+    if (source.type === "powerstrip") {
+      return upstreamPowerPathPixelsToDevice(source.id, devicesById, cables) ?? 0;
+    }
+    if (source.type === "powerCable" && source.route && assignment.targetPoint) {
+      const targetEndpoint = nearestRouteEndpoint(source.route, assignment.targetPoint);
+      return targetEndpoint
+        ? upstreamPowerPathPixelsToRouteEndpoint(source.route, targetEndpoint, devicesById, cables) ?? 0
+        : 0;
+    }
+    return 0;
+  };
   const selectedFlowPaths = useMemo<FlowPath[]>(() => {
     if (!selectedDevice) return [];
-    const devicesById = new Map(devices.map((device) => [device.id, device]));
     const paths: FlowPath[] = [];
     const addPath = (id: string, points: Point[], cableType: CableType) => {
       const cleanPoints = dedupeAdjacentPoints(points);
@@ -1948,10 +2100,13 @@ function App() {
       pathData: string,
       cableType: CableType,
       usesDisplayCoordinates = false,
+      startRatio = 0,
     ) => {
       if (pathData) {
         const fallbackColors =
-          cableType === "power" ? flowColorsAtRatio(0) : flowColorsForCable(cableTypes[cableType].colorStart);
+          cableType === "power"
+            ? flowColorsAtRatio(startRatio)
+            : flowColorsForCable(cableTypes[cableType].colorStart);
         paths.push({ id, pathData, usesDisplayCoordinates, ...fallbackColors });
       }
     };
@@ -1970,32 +2125,6 @@ function App() {
       if (!sourceEndpoint || !targetEndpoint) return;
       addPath(id, routePathBetweenEndpoints(route, sourceEndpoint, targetEndpoint), route.type);
     };
-    const upstreamEndpointForPowerRoute = (route: CableRoute, targetDeviceId: string) => {
-      const endpoints = routeEndpointReferences(route);
-      const targetEndpoint = endpoints.find((endpoint) => endpoint.deviceId === targetDeviceId);
-      if (!targetEndpoint) return undefined;
-      const candidateEndpoints = endpoints.filter(
-        (endpoint) => endpoint.deviceId !== targetDeviceId,
-      );
-      const producerEndpoint = candidateEndpoints.find(
-        (endpoint) =>
-          endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "producer",
-      );
-      if (producerEndpoint) return producerEndpoint;
-      return candidateEndpoints.find((endpoint) => {
-        if (!endpoint.deviceId) return true;
-        if (devicesById.get(endpoint.deviceId)?.type !== "powerstrip") return false;
-        return Boolean(
-          upstreamProducerIdForPowerstrip(
-            endpoint.deviceId,
-            devicesById,
-            cables,
-            new Set([route.id]),
-            new Set([targetDeviceId]),
-          ),
-        );
-      });
-    };
     const addPowerFlowToDevice = (
       targetDeviceId: string,
       idPrefix: string,
@@ -2010,7 +2139,12 @@ function App() {
       const feed = resolveDeviceCableAttachments(targetDevice, cables, "power")
         .map((attachment) => ({
           attachment,
-          sourceEndpoint: upstreamEndpointForPowerRoute(attachment.route, targetDeviceId),
+          sourceEndpoint: upstreamEndpointForPowerRoute(
+            attachment.route,
+            targetDeviceId,
+            devicesById,
+            cables,
+          ),
           targetEndpoint: endpointForDevice(attachment.route, targetDeviceId),
         }))
         .filter(
@@ -2094,6 +2228,8 @@ function App() {
         const targetPoint = selectedConsumerAssignment?.targetPoint;
         if (source && targetPoint && source.type === "powerstrip") {
           addPowerFlowToDevice(source.id, `power-strip-feed-${source.id}`);
+          const arcStartPixels = upstreamPowerPathPixelsToDevice(source.id, devicesById, cables) ?? 0;
+          const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
           addPathData(
             `power-strip-arc-existing-${source.id}-${selectedDevice.id}`,
             reversedSourceArcPath(
@@ -2102,14 +2238,23 @@ function App() {
             ),
             "power",
             true,
+            maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
           );
         } else if (source && targetPoint && source.type === "powerCable" && source.route) {
           const targetEndpoint = nearestRouteEndpoint(source.route, targetPoint);
           const sourceEndpoint =
             targetEndpoint?.deviceId
-              ? upstreamEndpointForPowerRoute(source.route, targetEndpoint.deviceId)
+              ? upstreamEndpointForPowerRoute(
+                  source.route,
+                  targetEndpoint.deviceId,
+                  devicesById,
+                  cables,
+                )
               : preferredPowerSourceEndpoint(source.route, devicesById);
           if (targetEndpoint && sourceEndpoint) {
+            const arcStartPixels =
+              upstreamPowerPathPixelsToRouteEndpoint(source.route, targetEndpoint, devicesById, cables) ?? 0;
+            const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
             addPath(
               `power-cable-feed-${source.route.id}`,
               routePathBetweenEndpoints(source.route, sourceEndpoint, targetEndpoint),
@@ -2123,6 +2268,7 @@ function App() {
               ),
               "power",
               true,
+              maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
             );
             if (
               sourceEndpoint.deviceId &&
@@ -2206,7 +2352,7 @@ function App() {
     return paths;
   }, [
     cables,
-    devices,
+    devicesById,
     pixelsPerMeter,
     selectedConsumerAssignment,
     selectedDevice,
@@ -4577,13 +4723,24 @@ function App() {
                     assignment.consumer.id !== selectedDevice?.id,
                 )
                 .map((assignment) => {
-                  const start = toDisplayPoint(assignment.consumer.point);
-                  const end = toDisplayPoint(assignment.targetPoint as Point);
+                  const startPoint = assignment.consumer.point;
+                  const endPoint = assignment.targetPoint as Point;
+                  const start = toDisplayPoint(startPoint);
+                  const end = toDisplayPoint(endPoint);
+                  const upstreamPixels = powerPathPixelsToAssignmentSource(assignment);
+                  const arcPixels = sourceArcPixels(startPoint, endPoint);
+                  const maxLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
+                  const startRatio = maxLengthPx ? upstreamPixels / maxLengthPx : 0;
+                  const endRatio = maxLengthPx ? (upstreamPixels + arcPixels) / maxLengthPx : 0;
                   return (
-                    <path
-                      className="auto-source-link"
-                      d={sourceArcPath(start, end)}
+                    <AutoSourceLink
+                      end={end}
+                      endRatio={endRatio}
+                      id={`${assignment.consumer.id}-${assignment.source?.type}-${assignment.source?.id}`}
                       key={`${assignment.consumer.id}-${assignment.source?.type}-${assignment.source?.id}`}
+                      pathData={sourceArcPath(start, end)}
+                      start={start}
+                      startRatio={startRatio}
                     />
                   );
                 })}
@@ -4961,6 +5118,46 @@ function CableRouteEditPointLayer({
           </g>
         );
       })}
+    </g>
+  );
+}
+
+function AutoSourceLink({
+  end,
+  endRatio,
+  id,
+  pathData,
+  start,
+  startRatio,
+}: {
+  end: Point;
+  endRatio: number;
+  id: string;
+  pathData: string;
+  start: Point;
+  startRatio: number;
+}) {
+  const gradientId = `auto-source-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  return (
+    <g>
+      <defs>
+        <linearGradient
+          gradientUnits="userSpaceOnUse"
+          id={gradientId}
+          x1={start.x}
+          x2={end.x}
+          y1={start.y}
+          y2={end.y}
+        >
+          <stop offset="0%" stopColor={colorAtRatio(startRatio)} />
+          <stop offset="100%" stopColor={colorAtRatio(endRatio)} />
+        </linearGradient>
+      </defs>
+      <path
+        className="auto-source-link"
+        d={pathData}
+        style={{ stroke: `url(#${gradientId})` }}
+      />
     </g>
   );
 }
