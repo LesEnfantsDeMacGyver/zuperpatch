@@ -2299,13 +2299,17 @@ function App() {
             (sum, assignment) => sum + (assignment.client.poePowerW ?? 0),
             0,
           );
+          const ownPowerW = switchDevice.powerW ?? 0;
           return {
             switchId: switchDevice.id,
+            name: switchDevice.name || "Ethernet switch",
             cableCount: ethernetSwitchAttachments.filter(
               (attachment) => attachment.device.id === switchDevice.id,
             ).length,
             clientCount: assignments.length,
+            ownPowerW,
             poeLoadW,
+            totalRequiredPowerW: ownPowerW + poeLoadW,
             socketCapacity: socketCapacityForDevice(switchDevice),
           };
         }),
@@ -3640,15 +3644,17 @@ function App() {
     }
 
     addSection("Network");
-    ethernetSwitchPoeStats.forEach((switchStats, index) => {
+    ethernetSwitchPoeStats.forEach((switchStats) => {
       addItem(
-        `Ethernet switch ${index + 1}`,
+        switchStats.name,
         `${switchStats.socketCapacity} port${switchStats.socketCapacity === 1 ? "" : "s"}`,
         `${switchStats.cableCount} cable${switchStats.cableCount === 1 ? "" : "s"} connected; ${
           switchStats.clientCount
         } PoE client${switchStats.clientCount === 1 ? "" : "s"}; ${powerLabel(
+          switchStats.ownPowerW,
+        )} switch load; ${powerLabel(
           switchStats.poeLoadW,
-        )} PoE required`,
+        )} PoE load; ${powerLabel(switchStats.totalRequiredPowerW)} total required`,
       );
     });
 
@@ -3791,6 +3797,7 @@ function App() {
     if (mode === "device") {
       const producerCount = devices.filter((device) => device.type === "producer").length + 1;
       const consumerCount = devices.filter((device) => device.type === "consumer").length + 1;
+      const switchCount = devices.filter((device) => device.type === "switch").length + 1;
       const ethernetClientCount =
         devices.filter((device) => device.type === "ethernetClient").length + 1;
       const device: Device = {
@@ -3813,6 +3820,8 @@ function App() {
           : {}),
         ...(activeDevice === "switch"
           ? {
+              name: `Ethernet switch ${switchCount}`,
+              powerW: 0,
               socketCapacity: defaultEthernetSwitchSockets,
             }
           : {}),
@@ -4586,6 +4595,7 @@ function App() {
             </p>
 
             {(selectedCommonDeviceType === "producer" ||
+              selectedCommonDeviceType === "switch" ||
               selectedCommonDeviceType === "consumer" ||
               selectedCommonDeviceType === "ethernetClient") && (
               <label className="field">
@@ -4648,80 +4658,82 @@ function App() {
               </label>
             )}
 
+            {(selectedCommonDeviceType === "consumer" ||
+              selectedCommonDeviceType === "switch") && (
+              <label className="field">
+                <span>Required power</span>
+                <div className="input-row">
+                  <input
+                    inputMode="decimal"
+                    min="0"
+                    placeholder={selectedCommonRequiredPowerW === undefined ? "Mixed" : undefined}
+                    step="10"
+                    type="number"
+                    value={selectedCommonRequiredPowerW ?? ""}
+                    onChange={(event) =>
+                      updateSelectedDevices({
+                        powerW: Math.max(0, Number(event.target.value) || 0),
+                      })
+                    }
+                  />
+                  <span>W</span>
+                </div>
+              </label>
+            )}
+
             {selectedCommonDeviceType === "consumer" && (
-              <>
-                <label className="field">
-                  <span>Required power</span>
-                  <div className="input-row">
-                    <input
-                      inputMode="decimal"
-                      min="0"
-                      placeholder={selectedCommonRequiredPowerW === undefined ? "Mixed" : undefined}
-                      step="10"
-                      type="number"
-                      value={selectedCommonRequiredPowerW ?? ""}
-                      onChange={(event) =>
-                        updateSelectedDevices({
-                          powerW: Math.max(0, Number(event.target.value) || 0),
-                        })
-                      }
-                    />
-                    <span>W</span>
-                  </div>
-                </label>
-                <label className="field">
-                  <span>Power source</span>
-                  <select
-                    className="select-input"
-                    value={selectedMultiConsumerSourceValue}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (value === "auto") {
-                        updateSelectedDevices({
-                          sourceMode: "auto",
-                          sourceType: undefined,
-                          sourceId: undefined,
-                        });
-                        return;
-                      }
-                      if (value === "none") {
-                        updateSelectedDevices({
-                          sourceMode: "manual",
-                          sourceType: undefined,
-                          sourceId: undefined,
-                        });
-                        return;
-                      }
-                      const [sourceType, sourceId] = value.split(":") as [
-                        ConsumerSourceType,
-                        string,
-                      ];
+              <label className="field">
+                <span>Power source</span>
+                <select
+                  className="select-input"
+                  value={selectedMultiConsumerSourceValue}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "auto") {
+                      updateSelectedDevices({
+                        sourceMode: "auto",
+                        sourceType: undefined,
+                        sourceId: undefined,
+                      });
+                      return;
+                    }
+                    if (value === "none") {
                       updateSelectedDevices({
                         sourceMode: "manual",
-                        sourceType,
-                        sourceId,
+                        sourceType: undefined,
+                        sourceId: undefined,
                       });
-                    }}
-                  >
-                    <option disabled value="mixed">
-                      Mixed
-                    </option>
-                    <option value="auto">Auto closest source/end within 1.5 m</option>
-                    <option value="none">Unassigned</option>
-                    {powerSources
-                      .filter((source) =>
-                        selectedCommonPage !== undefined
-                          ? source.page === selectedCommonPage
-                          : source.page === pageNumber,
-                      )
-                      .map((source) => (
-                        <option key={`${source.type}:${source.id}`} value={sourceValue(source)}>
-                          {sourceLabel(source)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              </>
+                      return;
+                    }
+                    const [sourceType, sourceId] = value.split(":") as [
+                      ConsumerSourceType,
+                      string,
+                    ];
+                    updateSelectedDevices({
+                      sourceMode: "manual",
+                      sourceType,
+                      sourceId,
+                    });
+                  }}
+                >
+                  <option disabled value="mixed">
+                    Mixed
+                  </option>
+                  <option value="auto">Auto closest source/end within 1.5 m</option>
+                  <option value="none">Unassigned</option>
+                  {powerSources
+                    .filter((source) =>
+                      selectedCommonPage !== undefined
+                        ? source.page === selectedCommonPage
+                        : source.page === pageNumber,
+                    )
+                    .map((source) => (
+                      <option key={`${source.type}:${source.id}`} value={sourceValue(source)}>
+                        {sourceLabel(source)}
+                      </option>
+                    ))}
+                </select>
+              </label>
             )}
 
             {selectedCommonDeviceType === "ethernetClient" && (
@@ -4837,6 +4849,34 @@ function App() {
           <section className="tool-group editor-panel" aria-label="Selected Ethernet switch">
             <h2>Ethernet switch</h2>
             <label className="field">
+              <span>Name</span>
+              <input
+                className="text-input"
+                value={selectedDevice.name ?? ""}
+                onChange={(event) =>
+                  updateDevice(selectedDevice.id, { name: event.target.value })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Required power</span>
+              <div className="input-row">
+                <input
+                  inputMode="decimal"
+                  min="0"
+                  step="1"
+                  type="number"
+                  value={selectedDevice.powerW ?? 0}
+                  onChange={(event) =>
+                    updateDevice(selectedDevice.id, {
+                      powerW: Math.max(0, Number(event.target.value) || 0),
+                    })
+                  }
+                />
+                <span>W</span>
+              </div>
+            </label>
+            <label className="field">
               <span>Ethernet sockets</span>
               <div className="input-row">
                 <input
@@ -4864,9 +4904,9 @@ function App() {
             </div>
             <div className="status ready">
               <EthernetPort aria-hidden="true" />
-              {powerLabel(selectedSwitchPoeStats?.poeLoadW ?? 0)} PoE required by{" "}
-              {selectedSwitchPoeStats?.clientCount ?? 0} client
-              {(selectedSwitchPoeStats?.clientCount ?? 0) === 1 ? "" : "s"}
+              {powerLabel(selectedSwitchPoeStats?.totalRequiredPowerW ?? 0)} total required
+              {" "}({powerLabel(selectedSwitchPoeStats?.ownPowerW ?? 0)} switch +{" "}
+              {powerLabel(selectedSwitchPoeStats?.poeLoadW ?? 0)} PoE)
             </div>
           </section>
         )}
@@ -5471,6 +5511,7 @@ function App() {
                 const primaryLabel =
                   device.type === "producer" ||
                   device.type === "consumer" ||
+                  device.type === "switch" ||
                   device.type === "ethernetClient"
                     ? device.name || config.label
                     : config.label;
@@ -5484,8 +5525,8 @@ function App() {
                           );
                           if (!stats) return "";
                           const socketText = `${stats.cableCount}/${stats.socketCapacity} ports`;
-                          return stats.poeLoadW
-                            ? `${socketText}, ${powerLabel(stats.poeLoadW)} PoE`
+                          return stats.totalRequiredPowerW
+                            ? `${socketText}, ${powerLabel(stats.totalRequiredPowerW)} required`
                             : socketText;
                         })()
                     : device.type === "ethernetClient"
