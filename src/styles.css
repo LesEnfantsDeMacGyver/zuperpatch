@@ -322,6 +322,19 @@ h2 {
   color: var(--color-brand-contrast);
 }
 
+.segmented button.active:hover:not(:disabled),
+.compact-segmented button.active:hover:not(:disabled),
+.option.active:hover:not(:disabled) {
+  background: var(--color-brand);
+  border-color: var(--color-brand);
+  color: var(--color-brand-contrast);
+}
+
+.option.active small {
+  color: var(--color-brand-contrast);
+  opacity: 0.78;
+}
+
 .field {
   display: grid;
   gap: 0.35rem;
