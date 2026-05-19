@@ -10,6 +10,7 @@ import {
   GitBranch,
   Minus,
   MousePointer2,
+  PencilRuler,
   PlugZap,
   Plus,
   Ruler,
@@ -40,7 +41,7 @@ type DeviceType =
   | "producer"
   | "consumer";
 type LabelPosition = "top" | "right" | "bottom" | "left";
-type Mode = "select" | "scale" | "cable" | "device";
+type Mode = "select" | "scale" | "measure" | "cable" | "device";
 type ConsumerSourceMode = "auto" | "manual";
 type ConsumerSourceType = "producer" | "powerstrip" | "powerCable";
 type ElectricalColorMode = "length" | "load";
@@ -142,6 +143,12 @@ type SpacePanDrag = {
   startClientY: number;
   startScrollLeft: number;
   startScrollTop: number;
+};
+type Measurement = {
+  id: string;
+  page: number;
+  start: Point;
+  end: Point;
 };
 type RouteEndpointReference = ReturnType<typeof routeEndpointReferences>[number];
 
@@ -1826,6 +1833,8 @@ function App() {
   const [knownDistance, setKnownDistance] = useState("10");
   const [calibration, setCalibration] = useState<{ start: Point; end: Point }>();
   const [scaleDraft, setScaleDraft] = useState<Point | null>(null);
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [measurementDraft, setMeasurementDraft] = useState<Measurement | null>(null);
   const [routeDraft, setRouteDraft] = useState<Point[]>([]);
   const [routeDraftDeviceIds, setRouteDraftDeviceIds] = useState<Array<string | undefined>>([]);
   const [cursorPoint, setCursorPoint] = useState<Point | null>(null);
@@ -2121,6 +2130,11 @@ function App() {
           setMode("select");
           return;
         }
+        if (shortcutKey === "m") {
+          event.preventDefault();
+          setMode("measure");
+          return;
+        }
         if (shortcutKey === "c") {
           event.preventDefault();
           setMode("cable");
@@ -2168,6 +2182,8 @@ function App() {
         setRouteDraft([]);
         setRouteDraftDeviceIds([]);
         setScaleDraft(null);
+        setMeasurements([]);
+        setMeasurementDraft(null);
         setCursorPoint(null);
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
@@ -2206,6 +2222,13 @@ function App() {
     setRouteDraftDeviceIds([]);
     setCursorPoint(null);
   }, [cursorPoint, mode, routeDraft.length, routeDraftDeviceIds.length]);
+
+  useEffect(() => {
+    if (mode === "measure") return;
+    if (measurements.length === 0 && !measurementDraft) return;
+    setMeasurements([]);
+    setMeasurementDraft(null);
+  }, [measurementDraft, measurements.length, mode]);
 
   useEffect(() => {
     const previousContext = cableDraftContextRef.current;
@@ -4391,6 +4414,16 @@ function App() {
       return;
     }
 
+    if (mode === "measure") {
+      setMeasurementDraft({
+        id: createId("measurement"),
+        page: pageNumber,
+        start: point,
+        end: point,
+      });
+      return;
+    }
+
     if (mode === "cable") {
       addCablePoint(point, event.shiftKey || isShiftPressed);
       return;
@@ -4616,6 +4649,10 @@ function App() {
       setCalibration({ ...calibration, end: point });
       return;
     }
+    if (mode === "measure" && measurementDraft) {
+      setMeasurementDraft({ ...measurementDraft, end: point });
+      return;
+    }
     if (mode === "cable" && routeDraft.length > 0) {
       const lastPoint = routeDraft[routeDraft.length - 1];
       setCursorPoint(
@@ -4626,8 +4663,15 @@ function App() {
     }
   }
 
-  function handlePointerUp() {
+  function handlePointerUp(event: PointerEvent) {
     finishUndoGroup();
+    if (measurementDraft) {
+      const finalMeasurement = { ...measurementDraft, end: pointerFromEvent(event) };
+      if (distance(finalMeasurement.start, finalMeasurement.end) > 3) {
+        setMeasurements((current) => [...current, finalMeasurement]);
+      }
+      setMeasurementDraft(null);
+    }
     setScaleDraft(null);
     setDraggingDevice(null);
     setDraggingCablePoint(null);
@@ -4970,6 +5014,10 @@ function App() {
 
   const draftMeters =
     draftRoute.length > 1 && pixelsPerMeter ? routePixels(draftRoute) / pixelsPerMeter : 0;
+  const visibleMeasurements = [
+    ...measurements,
+    ...(measurementDraft ? [measurementDraft] : []),
+  ].filter((measurement) => measurement.page === pageNumber);
   const selectedCableRoute = currentCables.find((route) => route.id === selectedId);
   const selectedMultiConsumerSourceValue =
     selectedCommonDeviceType !== "consumer"
@@ -5107,6 +5155,14 @@ function App() {
               >
                 <Ruler aria-hidden="true" />
                 Scale
+              </button>
+              <button
+                className={mode === "measure" ? "active" : ""}
+                type="button"
+                onClick={() => setMode("measure")}
+              >
+                <PencilRuler aria-hidden="true" />
+                Measure
               </button>
               <button
                 className={planningMode ? "active wide-segment" : "wide-segment"}
@@ -6034,6 +6090,39 @@ function App() {
                 </g>
               )}
 
+              {mode === "measure" && visibleMeasurements.length > 0 && (
+                <g className="measurement-layer">
+                  {visibleMeasurements.map((measurement) => {
+                    const start = toDisplayPoint(measurement.start);
+                    const end = toDisplayPoint(measurement.end);
+                    const midpoint = routeMidpoint([start, end]);
+                    const meters = pixelsPerMeter
+                      ? distance(measurement.start, measurement.end) / pixelsPerMeter
+                      : undefined;
+                    return (
+                      <g key={measurement.id}>
+                        <line
+                          x1={start.x}
+                          x2={end.x}
+                          y1={start.y}
+                          y2={end.y}
+                        />
+                        <circle cx={start.x} cy={start.y} r="4.5" />
+                        <circle cx={end.x} cy={end.y} r="4.5" />
+                        <g transform={`translate(${midpoint.x} ${midpoint.y})`}>
+                          <rect height="24" rx="5" width="88" x="-44" y="-34" />
+                          <text x="0" y="-18">
+                            {meters !== undefined
+                              ? lengthLabel(meters)
+                              : `${integerUnit.format(distance(measurement.start, measurement.end))} px`}
+                          </text>
+                        </g>
+                      </g>
+                    );
+                  })}
+                </g>
+              )}
+
               {visiblePlanCables.map((route) => (
                 <CableRouteView
                   active={selectedId === route.id}
@@ -6336,6 +6425,8 @@ function App() {
 
         <footer className="hintbar">
           {mode === "scale" && "Drag across a known wall or reference line, then enter its real distance."}
+          {mode === "measure" &&
+            "Drag between two points to measure a temporary distance. Measurements clear when you switch tools."}
           {mode === "cable" &&
             "Click to add route points. Hold Shift to snap to 45 degrees. Backspace removes the previous point."}
           {mode === "device" && "Click on the floor plan to place the selected device."}

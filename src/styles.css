@@ -589,6 +589,10 @@ h2 {
   cursor: crosshair;
 }
 
+.mode-measure {
+  cursor: crosshair;
+}
+
 .mode-cable {
   cursor: copy;
 }
@@ -662,6 +666,42 @@ h2 {
   fill: var(--color-stage);
   stroke: var(--color-brand);
   stroke-width: 3;
+}
+
+.measurement-layer {
+  pointer-events: none;
+}
+
+.measurement-layer line {
+  fill: none;
+  stroke: var(--color-brand);
+  stroke-dasharray: 8 6;
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+.measurement-layer circle {
+  fill: var(--color-stage);
+  stroke: var(--color-brand);
+  stroke-width: 2.5;
+}
+
+.measurement-layer rect {
+  fill: var(--color-panel);
+  stroke: var(--color-brand);
+  stroke-width: 1.5;
+}
+
+.measurement-layer text {
+  fill: var(--color-strong);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
+  paint-order: stroke;
+  stroke: var(--color-panel);
+  stroke-linejoin: round;
+  stroke-width: 3px;
+  text-anchor: middle;
 }
 
 .cable-route {
