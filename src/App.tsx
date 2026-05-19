@@ -502,31 +502,6 @@ function translateRoute(route: CableRoute, delta: Point): CableRoute {
   };
 }
 
-function clampDeltaForBounds(
-  delta: Point,
-  bounds: SelectionBounds,
-  pageBounds: { width: number; height: number },
-): Point {
-  return {
-    x: clampNumber(delta.x, -bounds.minX, pageBounds.width - bounds.maxX),
-    y: clampNumber(delta.y, -bounds.minY, pageBounds.height - bounds.maxY),
-  };
-}
-
-function maxScaleForBounds(
-  center: Point,
-  bounds: SelectionBounds,
-  pageBounds: { width: number; height: number },
-) {
-  const candidates = [
-    bounds.maxX > center.x ? (pageBounds.width - center.x) / (bounds.maxX - center.x) : Infinity,
-    bounds.minX < center.x ? center.x / (center.x - bounds.minX) : Infinity,
-    bounds.maxY > center.y ? (pageBounds.height - center.y) / (bounds.maxY - center.y) : Infinity,
-    bounds.minY < center.y ? center.y / (center.y - bounds.minY) : Infinity,
-  ].filter((value) => Number.isFinite(value) && value > 0);
-  return Math.max(0.15, Math.min(...candidates, 8));
-}
-
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -4792,11 +4767,12 @@ function App() {
     const point = pointerFromEvent(event);
     if (draggingSelection) {
       if (draggingSelection.pointerId !== event.pointerId) return;
+      const selectionPoint = pointerFromEvent(event, false);
       const rawDelta = {
-        x: point.x - draggingSelection.startPoint.x,
-        y: point.y - draggingSelection.startPoint.y,
+        x: selectionPoint.x - draggingSelection.startPoint.x,
+        y: selectionPoint.y - draggingSelection.startPoint.y,
       };
-      const delta = clampDeltaForBounds(rawDelta, draggingSelection.bounds, modelPageSize);
+      const delta = rawDelta;
       const selectedCableIdSet = new Set(draggingSelection.cableIds);
 
       setDevices((current) =>
@@ -4838,8 +4814,9 @@ function App() {
     }
     if (scalingSelection) {
       if (scalingSelection.pointerId !== event.pointerId) return;
+      const selectionPoint = pointerFromEvent(event, false);
       const scale = clampNumber(
-        distance(point, scalingSelection.center) / scalingSelection.initialDistance,
+        distance(selectionPoint, scalingSelection.center) / scalingSelection.initialDistance,
         0.15,
         scalingSelection.maxScale,
       );
@@ -4886,7 +4863,11 @@ function App() {
     }
     if (rotatingSelection) {
       if (rotatingSelection.pointerId !== event.pointerId) return;
-      const angle = Math.atan2(point.y - rotatingSelection.center.y, point.x - rotatingSelection.center.x);
+      const selectionPoint = pointerFromEvent(event, false);
+      const angle = Math.atan2(
+        selectionPoint.y - rotatingSelection.center.y,
+        selectionPoint.x - rotatingSelection.center.x,
+      );
       const snappedDelta = Math.round((angle - rotatingSelection.initialAngle) / (Math.PI / 4)) * (Math.PI / 4);
       setDevices((current) =>
         current.map((device) => {
@@ -5371,7 +5352,7 @@ function App() {
           })),
         })),
       pointerId: event.pointerId,
-      startPoint: pointerFromEvent(event),
+      startPoint: pointerFromEvent(event, false),
     });
   }
 
@@ -5381,7 +5362,7 @@ function App() {
     event.preventDefault();
     beginUndoGroup();
     const center = selectionCenter(selectedObjectBounds);
-    const point = pointerFromEvent(event);
+    const point = pointerFromEvent(event, false);
     setRotatingSelection({
       center,
       initialAngle: Math.atan2(point.y - center.y, point.x - center.x),
@@ -5408,7 +5389,7 @@ function App() {
     event.preventDefault();
     beginUndoGroup();
     const center = selectionCenter(selectedObjectBounds);
-    const point = pointerFromEvent(event);
+    const point = pointerFromEvent(event, false);
     const attachedCablePoints = selectedDevices.flatMap((device) =>
       attachedCablePointsForDevice(device, cables),
     );
@@ -5435,7 +5416,7 @@ function App() {
             points: branch.points.map(clonePoint),
           })),
         })),
-      maxScale: maxScaleForBounds(center, selectedObjectBounds, modelPageSize),
+      maxScale: 8,
       pointerId: event.pointerId,
     });
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -7086,6 +7067,15 @@ function App() {
                     const centerX = (min.x + max.x) / 2;
                     const knobY = min.y - 28;
                     const scaleHandleSize = 12;
+                    const handleInset = scaleHandleSize / 2 + 2;
+                    const rotateHandle = {
+                      x: clampNumber(centerX, handleInset, pageSize.width - handleInset),
+                      y: clampNumber(knobY, handleInset, pageSize.height - handleInset),
+                    };
+                    const scaleHandle = {
+                      x: clampNumber(max.x, handleInset, pageSize.width - handleInset),
+                      y: clampNumber(max.y, handleInset, pageSize.height - handleInset),
+                    };
                     return (
                       <>
                         <rect
@@ -7094,18 +7084,18 @@ function App() {
                           width={max.x - min.x}
                           height={max.y - min.y}
                         />
-                        <line x1={centerX} x2={centerX} y1={min.y} y2={knobY} />
+                        <line x1={centerX} x2={rotateHandle.x} y1={min.y} y2={rotateHandle.y} />
                         <circle
                           className="selection-rotate-knob"
-                          cx={centerX}
-                          cy={knobY}
+                          cx={rotateHandle.x}
+                          cy={rotateHandle.y}
                           r="7"
                           onPointerDown={beginSelectionRotation}
                         />
                         <rect
                           className="selection-scale-knob"
-                          x={max.x - scaleHandleSize / 2}
-                          y={max.y - scaleHandleSize / 2}
+                          x={scaleHandle.x - scaleHandleSize / 2}
+                          y={scaleHandle.y - scaleHandleSize / 2}
                           width={scaleHandleSize}
                           height={scaleHandleSize}
                           rx="2"
