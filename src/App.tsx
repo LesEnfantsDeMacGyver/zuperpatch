@@ -42,7 +42,7 @@ type DeviceType =
 type LabelPosition = "top" | "right" | "bottom" | "left";
 type Mode = "select" | "scale" | "cable" | "device";
 type ConsumerSourceMode = "auto" | "manual";
-type ConsumerSourceType = "powerstrip" | "powerCable";
+type ConsumerSourceType = "producer" | "powerstrip" | "powerCable";
 
 type CableRoute = {
   id: string;
@@ -924,6 +924,12 @@ function sourceLabel(source?: ConsumerSource) {
   return source?.label ?? "Unassigned";
 }
 
+function consumerSourcePriority(source: ConsumerSource) {
+  if (source.type === "powerstrip") return 0;
+  if (source.type === "producer") return 1;
+  return 2;
+}
+
 function sourceArcControl(start: Point, end: Point) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -1071,7 +1077,12 @@ function resolveConsumerSource(
 
   const maxDistance = pixelsPerMeter * 1.5;
   const candidates = sources
-    .filter((source) => source.type === "powerstrip" || source.type === "powerCable")
+    .filter(
+      (source) =>
+        source.type === "powerstrip" ||
+        source.type === "producer" ||
+        source.type === "powerCable",
+    )
     .map((source) => {
       const targetPoint = closestSourcePoint(consumer.point, source);
       return {
@@ -1085,7 +1096,7 @@ function resolveConsumerSource(
     .filter((candidate) => Boolean(candidate.targetPoint) && candidate.distancePx <= maxDistance)
     .sort((a, b) => {
       if (a.source.type !== b.source.type) {
-        return a.source.type === "powerstrip" ? -1 : 1;
+        return consumerSourcePriority(a.source) - consumerSourcePriority(b.source);
       }
       return a.distancePx - b.distancePx;
     });
@@ -1938,6 +1949,15 @@ function App() {
     [directPowerConsumerAttachments],
   );
   const powerSources = useMemo<ConsumerSource[]>(() => {
+    const producerSources = devices
+      .filter((device) => device.type === "producer")
+      .map((producer, index) => ({
+        id: producer.id,
+        type: "producer" as const,
+        label: producer.name || `Power source ${index + 1}`,
+        page: producer.page,
+        point: producer.point,
+      }));
     const powerstripSources = devices
       .filter((device) => device.type === "powerstrip")
       .map((powerstrip, index) => ({
@@ -1962,7 +1982,7 @@ function App() {
           targetPoints,
         }];
       });
-    return [...powerstripSources, ...cableSources];
+    return [...powerstripSources, ...producerSources, ...cableSources];
   }, [cables, devices]);
   const consumerSourceAssignments = useMemo(
     () =>
@@ -2266,6 +2286,7 @@ function App() {
   const powerPathPixelsToAssignmentSource = (assignment: ResolvedConsumerSource) => {
     const source = assignment.source;
     if (!source) return 0;
+    if (source.type === "producer") return 0;
     if (source.type === "powerstrip") {
       return upstreamPowerPathPixelsToDevice(source.id, devicesById, cables) ?? 0;
     }
@@ -2432,7 +2453,8 @@ function App() {
       consumerSourceAssignments
         .filter(
           (assignment) =>
-            assignment.source?.type === "powerstrip" &&
+            (assignment.source?.type === "powerstrip" ||
+              assignment.source?.type === "producer") &&
             assignment.source.id === sourceDeviceId &&
             assignment.targetPoint,
         )
@@ -2545,7 +2567,17 @@ function App() {
       if (directAttachments.length === 0) {
         const source = selectedConsumerAssignment?.source;
         const targetPoint = selectedConsumerAssignment?.targetPoint;
-        if (source && targetPoint && source.type === "powerstrip") {
+        if (source && targetPoint && source.type === "producer") {
+          addPathData(
+            `power-source-arc-existing-${source.id}-${selectedDevice.id}`,
+            reversedSourceArcPath(
+              scalePoint(selectedDevice.point, viewScale),
+              scalePoint(source.point, viewScale),
+            ),
+            "power",
+            true,
+          );
+        } else if (source && targetPoint && source.type === "powerstrip") {
           addPowerFlowToDevice(source.id, `power-strip-feed-${source.id}`);
           const arcStartPixels = upstreamPowerPathPixelsToDevice(source.id, devicesById, cables) ?? 0;
           const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
@@ -2716,6 +2748,9 @@ function App() {
     const producerIdForAssignment = (assignment: ResolvedConsumerSource) => {
       const source = assignment.source;
       if (!source) return undefined;
+      if (source.type === "producer") {
+        return source.id;
+      }
       if (source.type === "powerstrip") {
         return upstreamProducerIdForPowerstrip(source.id, devicesById, cables);
       }
@@ -2766,8 +2801,14 @@ function App() {
         producerPowerCableAttachments.find(
           (attachment) => attachment.producerId === producer.id,
         )?.attachments.length ?? 0;
+      const directSourceConsumerCount = consumerSourceAssignments.filter(
+        (assignment) =>
+          assignment.source?.type === "producer" &&
+          assignment.source.id === producer.id,
+      ).length;
+      const socketUsage = electricalCableCount + directSourceConsumerCount;
       const socketCapacity = socketCapacityForDevice(producer);
-      const overSocketLimit = socketCapacity > 0 && electricalCableCount > socketCapacity;
+      const overSocketLimit = socketCapacity > 0 && socketUsage > socketCapacity;
       return {
         id: producer.id,
         name: producer.name || "Power source",
@@ -2778,6 +2819,7 @@ function App() {
         percent: capacityW > 0 ? (usedW / capacityW) * 100 : 0,
         consumerCount: assignedConsumers.length,
         electricalCableCount,
+        socketUsage,
         socketCapacity,
         overLimit: (capacityW > 0 && usedW > capacityW) || overSocketLimit,
         overSocketLimit,
@@ -2818,6 +2860,7 @@ function App() {
     const assignmentHasPowerSource = (assignment: ResolvedConsumerSource | undefined) => {
       const source = assignment?.source;
       if (!source) return false;
+      if (source.type === "producer") return true;
       if (source.type === "powerstrip") {
         return Boolean(upstreamProducerIdForPowerstrip(source.id, devicesById, cables));
       }
@@ -2854,11 +2897,21 @@ function App() {
         producer.attachments.length,
       ]),
     );
+    const producerDirectConsumerCounts = new Map<string, number>();
+    consumerSourceAssignments.forEach((assignment) => {
+      if (assignment.source?.type !== "producer") return;
+      producerDirectConsumerCounts.set(
+        assignment.source.id,
+        (producerDirectConsumerCounts.get(assignment.source.id) ?? 0) + 1,
+      );
+    });
     devices.forEach((device) => {
       let connected = false;
 
       if (device.type === "producer") {
-        connected = (producerCableCounts.get(device.id) ?? 0) > 0;
+        connected =
+          (producerCableCounts.get(device.id) ?? 0) > 0 ||
+          (producerDirectConsumerCounts.get(device.id) ?? 0) > 0;
       } else if (device.type === "powerstrip") {
         connected = Boolean(upstreamProducerIdForPowerstrip(device.id, devicesById, cables));
       } else if (device.type === "consumer") {
@@ -5022,18 +5075,20 @@ function App() {
                     assignment.consumer.id !== selectedDevice?.id &&
                     !(
                       selectedDevice?.type === "producer" &&
-                      (assignment.source.type === "powerstrip"
-                        ? upstreamProducerIdForPowerstrip(
-                            assignment.source.id,
-                            devicesById,
-                            cables,
-                          ) === selectedDevice.id
-                        : assignment.source.route &&
-                          upstreamProducerIdForPowerRoute(
-                            assignment.source.route,
-                            devicesById,
-                            cables,
-                          ) === selectedDevice.id)
+                      (assignment.source.type === "producer"
+                        ? assignment.source.id === selectedDevice.id
+                        : assignment.source.type === "powerstrip"
+                          ? upstreamProducerIdForPowerstrip(
+                              assignment.source.id,
+                              devicesById,
+                              cables,
+                            ) === selectedDevice.id
+                          : assignment.source.route &&
+                            upstreamProducerIdForPowerRoute(
+                              assignment.source.route,
+                              devicesById,
+                              cables,
+                            ) === selectedDevice.id)
                     ),
                 )
                 .map((assignment) => {
@@ -5331,7 +5386,7 @@ function App() {
                   <div>
                     <dt>Power sockets</dt>
                     <dd>
-                      {producer.electricalCableCount} / {producer.socketCapacity}
+                      {producer.socketUsage} / {producer.socketCapacity}
                     </dd>
                   </div>
                 </dl>
