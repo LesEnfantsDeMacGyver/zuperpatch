@@ -144,6 +144,7 @@ type FlowPath = {
   pathData: string;
   activeColor: string;
   inactiveColor: string;
+  usesDisplayCoordinates?: boolean;
   segments?: FlowPathSegment[];
 };
 
@@ -859,7 +860,7 @@ function sourceLabel(source?: ConsumerSource) {
   return source?.label ?? "Unassigned";
 }
 
-function sourceArcPath(start: Point, end: Point) {
+function sourceArcControl(start: Point, end: Point) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const segmentLength = Math.hypot(dx, dy) || 1;
@@ -872,7 +873,19 @@ function sourceArcPath(start: Point, end: Point) {
     x: midpoint.x - (dy / segmentLength) * offset,
     y: midpoint.y + (dx / segmentLength) * offset,
   };
+  return control;
+}
+
+function sourceArcPathThroughControl(start: Point, control: Point, end: Point) {
   return `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`;
+}
+
+function sourceArcPath(start: Point, end: Point) {
+  return sourceArcPathThroughControl(start, sourceArcControl(start, end), end);
+}
+
+function reversedSourceArcPath(start: Point, end: Point) {
+  return sourceArcPathThroughControl(end, sourceArcControl(start, end), start);
 }
 
 function samePoint(first: Point, second: Point) {
@@ -1915,11 +1928,16 @@ function App() {
         });
       }
     };
-    const addPathData = (id: string, pathData: string, cableType: CableType) => {
+    const addPathData = (
+      id: string,
+      pathData: string,
+      cableType: CableType,
+      usesDisplayCoordinates = false,
+    ) => {
       if (pathData) {
         const fallbackColors =
           cableType === "power" ? flowColorsAtRatio(0) : flowColorsForCable(cableTypes[cableType].colorStart);
-        paths.push({ id, pathData, ...fallbackColors });
+        paths.push({ id, pathData, usesDisplayCoordinates, ...fallbackColors });
       }
     };
     const addRouteToSelectedDevice = (
@@ -1985,8 +2003,12 @@ function App() {
           });
           addPathData(
             `power-strip-arc-existing-${source.id}-${selectedDevice.id}`,
-            sourceArcPath(source.point, selectedDevice.point),
+            reversedSourceArcPath(
+              scalePoint(selectedDevice.point, viewScale),
+              scalePoint(source.point, viewScale),
+            ),
             "power",
+            true,
           );
         } else if (source && targetPoint && source.type === "powerCable" && source.route) {
           const targetEndpoint = nearestRouteEndpoint(source.route, targetPoint);
@@ -1999,8 +2021,12 @@ function App() {
             );
             addPathData(
               `power-cable-arc-existing-${source.route.id}-${selectedDevice.id}`,
-              sourceArcPath(targetEndpoint.point, selectedDevice.point),
+              reversedSourceArcPath(
+                scalePoint(selectedDevice.point, viewScale),
+                scalePoint(targetEndpoint.point, viewScale),
+              ),
               "power",
+              true,
             );
           }
         }
@@ -2080,6 +2106,7 @@ function App() {
     selectedConsumerAssignment,
     selectedDevice,
     selectedEthernetClientAssignment,
+    viewScale,
   ]);
   const draftRoute = useMemo(
     () =>
@@ -4407,7 +4434,10 @@ function App() {
               {(!hoveredPlanCableType || hoveredPlanCableType === "power") && currentConsumerSourceAssignments
                 .filter(
                   (assignment) =>
-                    assignment.autoAssigned && assignment.source && assignment.targetPoint,
+                    assignment.autoAssigned &&
+                    assignment.source &&
+                    assignment.targetPoint &&
+                    assignment.consumer.id !== selectedDevice?.id,
                 )
                 .map((assignment) => {
                   const start = toDisplayPoint(assignment.consumer.point);
@@ -4446,7 +4476,11 @@ function App() {
                     id={`flow-${path.id}`}
                     inactiveColor={path.inactiveColor}
                     key={path.id}
-                    pathData={scalePathData(path.pathData, viewScale)}
+                    pathData={
+                      path.usesDisplayCoordinates
+                        ? path.pathData
+                        : scalePathData(path.pathData, viewScale)
+                    }
                     segments={path.segments?.map((segment) => ({
                       ...segment,
                       end: scalePoint(segment.end, viewScale),
