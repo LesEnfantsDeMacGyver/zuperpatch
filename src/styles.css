@@ -681,6 +681,14 @@ h2 {
   cursor: grabbing;
 }
 
+.selection-scale-knob {
+  cursor: nwse-resize;
+  fill: var(--color-panel);
+  pointer-events: all;
+  stroke: #2563eb;
+  stroke-width: 2;
+}
+
 .calibration-layer line {
   stroke: var(--color-brand);
   stroke-dasharray: 7 5;

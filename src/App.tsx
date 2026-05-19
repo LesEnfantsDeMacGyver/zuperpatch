@@ -175,6 +175,16 @@ type DraggingSelection = {
   pointerId: number;
   startPoint: Point;
 };
+type ScalingSelection = {
+  attachedCablePoints: AttachedCablePoint[];
+  cableIds: string[];
+  center: Point;
+  initialDevices: Device[];
+  initialDistance: number;
+  initialRoutes: CableRoute[];
+  maxScale: number;
+  pointerId: number;
+};
 type RouteEndpointReference = ReturnType<typeof routeEndpointReferences>[number];
 
 type FlowPath = {
@@ -455,6 +465,24 @@ function rotateRoute(route: CableRoute, center: Point, angleRadians: number): Ca
   };
 }
 
+function scalePointAround(point: Point, center: Point, scale: number): Point {
+  return {
+    x: center.x + (point.x - center.x) * scale,
+    y: center.y + (point.y - center.y) * scale,
+  };
+}
+
+function scaleRoute(route: CableRoute, center: Point, scale: number): CableRoute {
+  return {
+    ...route,
+    points: route.points.map((point) => scalePointAround(point, center, scale)),
+    branches: route.branches?.map((branch) => ({
+      ...branch,
+      points: branch.points.map((point) => scalePointAround(point, center, scale)),
+    })),
+  };
+}
+
 function translatePoint(point: Point, delta: Point): Point {
   return {
     x: point.x + delta.x,
@@ -482,6 +510,20 @@ function clampDeltaForBounds(
     x: clampNumber(delta.x, -bounds.minX, pageBounds.width - bounds.maxX),
     y: clampNumber(delta.y, -bounds.minY, pageBounds.height - bounds.maxY),
   };
+}
+
+function maxScaleForBounds(
+  center: Point,
+  bounds: SelectionBounds,
+  pageBounds: { width: number; height: number },
+) {
+  const candidates = [
+    bounds.maxX > center.x ? (pageBounds.width - center.x) / (bounds.maxX - center.x) : Infinity,
+    bounds.minX < center.x ? center.x / (center.x - bounds.minX) : Infinity,
+    bounds.maxY > center.y ? (pageBounds.height - center.y) / (bounds.maxY - center.y) : Infinity,
+    bounds.minY < center.y ? center.y / (center.y - bounds.minY) : Infinity,
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return Math.max(0.15, Math.min(...candidates, 8));
 }
 
 function clampNumber(value: number, min: number, max: number) {
@@ -1977,6 +2019,7 @@ function App() {
   const [draggingCablePoint, setDraggingCablePoint] = useState<DraggingCablePoint | null>(null);
   const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
   const [draggingSelection, setDraggingSelection] = useState<DraggingSelection | null>(null);
+  const [scalingSelection, setScalingSelection] = useState<ScalingSelection | null>(null);
   const [rotatingSelection, setRotatingSelection] = useState<RotatingSelection | null>(null);
   const [selectedCablePoint, setSelectedCablePoint] = useState<SelectedCablePoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -4142,6 +4185,7 @@ function App() {
     setDraggingDevice(null);
     setDraggingCablePoint(null);
     setDraggingSelection(null);
+    setScalingSelection(null);
     setRotatingSelection(null);
     setSelectedId(snapshot.selectedId);
     setSelectedDeviceIds(
@@ -4736,6 +4780,54 @@ function App() {
       );
       return;
     }
+    if (scalingSelection) {
+      if (scalingSelection.pointerId !== event.pointerId) return;
+      const scale = clampNumber(
+        distance(point, scalingSelection.center) / scalingSelection.initialDistance,
+        0.15,
+        scalingSelection.maxScale,
+      );
+      const selectedCableIdSet = new Set(scalingSelection.cableIds);
+
+      setDevices((current) =>
+        current.map((device) => {
+          const initialDevice = scalingSelection.initialDevices.find(
+            (candidate) => candidate.id === device.id,
+          );
+          return initialDevice
+            ? {
+                ...device,
+                point: scalePointAround(initialDevice.point, scalingSelection.center, scale),
+              }
+            : device;
+        }),
+      );
+      setCables((current) =>
+        current.map((route) => {
+          const initialRoute = scalingSelection.initialRoutes.find(
+            (candidate) => candidate.id === route.id,
+          );
+          if (!initialRoute) return route;
+          if (selectedCableIdSet.has(route.id)) {
+            return scaleRoute(initialRoute, scalingSelection.center, scale);
+          }
+
+          const attachments = scalingSelection.attachedCablePoints.filter(
+            (attachment) => attachment.routeId === route.id,
+          );
+          return attachments.reduce<CableRoute>(
+            (editedRoute, attachment) =>
+              routeWithCablePoint(
+                editedRoute,
+                attachment,
+                scalePointAround(attachment.startPoint, scalingSelection.center, scale),
+              ),
+            initialRoute,
+          );
+        }),
+      );
+      return;
+    }
     if (rotatingSelection) {
       if (rotatingSelection.pointerId !== event.pointerId) return;
       const angle = Math.atan2(point.y - rotatingSelection.center.y, point.x - rotatingSelection.center.x);
@@ -4954,6 +5046,11 @@ function App() {
   function handlePointerUp(event: PointerEvent) {
     if (draggingSelection && draggingSelection.pointerId === event.pointerId) {
       setDraggingSelection(null);
+      finishUndoGroup();
+      return;
+    }
+    if (scalingSelection && scalingSelection.pointerId === event.pointerId) {
+      setScalingSelection(null);
       finishUndoGroup();
       return;
     }
@@ -5250,6 +5347,45 @@ function App() {
         ...device,
         point: clonePoint(device.point),
       })),
+      pointerId: event.pointerId,
+    });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function beginSelectionScale(event: PointerEvent<SVGRectElement>) {
+    if (!selectedObjectBounds || selectedObjectCount === 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    beginUndoGroup();
+    const center = selectionCenter(selectedObjectBounds);
+    const point = pointerFromEvent(event);
+    const attachedCablePoints = selectedDevices.flatMap((device) =>
+      attachedCablePointsForDevice(device, cables),
+    );
+    const affectedRouteIds = new Set([
+      ...selectedCableIds,
+      ...attachedCablePoints.map((attachment) => attachment.routeId),
+    ]);
+    setScalingSelection({
+      attachedCablePoints,
+      cableIds: [...selectedCableIds],
+      center,
+      initialDistance: Math.max(1, distance(center, point)),
+      initialDevices: selectedDevices.map((device) => ({
+        ...device,
+        point: clonePoint(device.point),
+      })),
+      initialRoutes: cables
+        .filter((route) => affectedRouteIds.has(route.id))
+        .map((route) => ({
+          ...route,
+          points: route.points.map(clonePoint),
+          branches: route.branches?.map((branch) => ({
+            ...branch,
+            points: branch.points.map(clonePoint),
+          })),
+        })),
+      maxScale: maxScaleForBounds(center, selectedObjectBounds, modelPageSize),
       pointerId: event.pointerId,
     });
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -6895,6 +7031,7 @@ function App() {
                     });
                     const centerX = (min.x + max.x) / 2;
                     const knobY = min.y - 28;
+                    const scaleHandleSize = 12;
                     return (
                       <>
                         <rect
@@ -6910,6 +7047,15 @@ function App() {
                           cy={knobY}
                           r="7"
                           onPointerDown={beginSelectionRotation}
+                        />
+                        <rect
+                          className="selection-scale-knob"
+                          x={max.x - scaleHandleSize / 2}
+                          y={max.y - scaleHandleSize / 2}
+                          width={scaleHandleSize}
+                          height={scaleHandleSize}
+                          rx="2"
+                          onPointerDown={beginSelectionScale}
                         />
                       </>
                     );
@@ -6928,7 +7074,7 @@ function App() {
             "Click to add route points. Hold Shift to snap to 45 degrees. Backspace removes the previous point."}
           {mode === "device" && "Click on the floor plan to place the selected device."}
           {mode === "select" &&
-            "Drag to select cables and devices. Drag selected objects to move them. Use the knob to rotate by 45 degrees."}
+            "Drag selected objects to move them. Use the top knob to rotate, or the corner handle to scale."}
         </footer>
       </section>
 
