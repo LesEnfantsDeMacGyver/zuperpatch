@@ -3057,6 +3057,84 @@ function App() {
       if (!sourceEndpoint || !targetEndpoint) return;
       addPath(id, routePathBetweenEndpoints(route, sourceEndpoint, targetEndpoint), route.type);
     };
+    const poweredJunctionFeedForRoute = (
+      route: CableRoute,
+      sourceEndpoint: RouteEndpointReference,
+      targetEndpoint: RouteEndpointReference,
+      visitedRouteIds: Set<string>,
+    ) => {
+      const sourceToTargetPoints = routePathBetweenEndpoints(route, sourceEndpoint, targetEndpoint);
+      const candidateRoutePoints = route.points
+        .map((point, pointIndex) => ({ point, pointIndex }))
+        .filter(
+          (candidate) =>
+            !samePoint(candidate.point, sourceEndpoint.point) &&
+            !samePoint(candidate.point, targetEndpoint.point) &&
+            sourceToTargetPoints.some((pathPoint) => samePoint(pathPoint, candidate.point)),
+        );
+
+      return candidateRoutePoints
+        .flatMap((candidate) =>
+          cables
+            .filter(
+              (currentRoute) =>
+                currentRoute.type === "power" &&
+                currentRoute.id !== route.id &&
+                !visitedRouteIds.has(currentRoute.id),
+            )
+            .flatMap((currentRoute) =>
+              routeEndpointReferences(currentRoute)
+                .filter((endpoint) => {
+                  if (!samePoint(endpoint.point, candidate.point)) return false;
+                  const endpointDevice = endpoint.deviceId
+                    ? devicesById.get(endpoint.deviceId)
+                    : undefined;
+                  return endpointDevice?.type !== "consumer" && endpointDevice?.type !== "switch";
+                })
+                .map((endpoint) => {
+                  const endpointDevice = endpoint.deviceId
+                    ? devicesById.get(endpoint.deviceId)
+                    : undefined;
+                  const upstreamSourceEndpoint =
+                    endpointDevice && endpointDevice.type !== "producer"
+                      ? upstreamEndpointForPowerRoute(
+                          currentRoute,
+                          endpoint.deviceId as string,
+                          devicesById,
+                          cables,
+                        )
+                      : preferredPowerSourceEndpoint(currentRoute, devicesById);
+                  if (!upstreamSourceEndpoint) return undefined;
+                  const upstreamPixels = upstreamPowerPathPixelsToRouteEndpoint(
+                    currentRoute,
+                    endpoint,
+                    devicesById,
+                    cables,
+                  );
+                  if (upstreamPixels === undefined) return undefined;
+                  return {
+                    routeEndpoint: {
+                      point: candidate.point,
+                      pointIndex: candidate.pointIndex,
+                    } as RouteEndpointReference,
+                    upstreamPixels,
+                    upstreamRoute: currentRoute,
+                    upstreamSourceEndpoint,
+                    upstreamTargetEndpoint: endpoint,
+                  };
+                }),
+            ),
+        )
+        .filter((feed) => Boolean(feed))
+        .map((feed) => feed as {
+          routeEndpoint: RouteEndpointReference;
+          upstreamPixels: number;
+          upstreamRoute: CableRoute;
+          upstreamSourceEndpoint: RouteEndpointReference;
+          upstreamTargetEndpoint: RouteEndpointReference;
+        })
+        .sort((first, second) => first.upstreamPixels - second.upstreamPixels)[0];
+    };
     const addPowerFlowToDevice = (
       targetDeviceId: string,
       idPrefix: string,
@@ -3163,26 +3241,51 @@ function App() {
         return;
       }
       if (samePoint(feed.sourceEndpoint.point, feed.targetEndpoint.point)) return;
-      const sourceOffsetPx =
-        upstreamPowerPathPixelsToEndpoint(feed.sourceEndpoint, devicesById, cables) ?? 0;
+      const junctionFeed = poweredJunctionFeedForRoute(
+        feed.attachment.route,
+        feed.sourceEndpoint,
+        feed.targetEndpoint,
+        visitedRouteIds,
+      );
+      const flowSourceEndpoint = junctionFeed?.routeEndpoint ?? feed.sourceEndpoint;
+      const sourceOffsetPx = junctionFeed
+        ? junctionFeed.upstreamPixels
+        : upstreamPowerPathPixelsToEndpoint(feed.sourceEndpoint, devicesById, cables) ?? 0;
+      if (junctionFeed) {
+        const upstreamOffsetPx =
+          upstreamPowerPathPixelsToEndpoint(
+            junctionFeed.upstreamSourceEndpoint,
+            devicesById,
+            cables,
+          ) ?? 0;
+        addPath(
+          `${idPrefix}-${junctionFeed.upstreamRoute.id}-junction`,
+          routePathBetweenEndpoints(
+            junctionFeed.upstreamRoute,
+            junctionFeed.upstreamSourceEndpoint,
+            junctionFeed.upstreamTargetEndpoint,
+          ),
+          "power",
+          upstreamOffsetPx,
+        );
+      }
       addPath(
         `${idPrefix}-${feed.attachment.route.id}`,
         routePathBetweenEndpoints(
           feed.attachment.route,
-          feed.sourceEndpoint,
+          flowSourceEndpoint,
           feed.targetEndpoint,
         ),
         "power",
         sourceOffsetPx,
       );
-      if (
-        feed.sourceEndpoint.deviceId &&
-        devicesById.get(feed.sourceEndpoint.deviceId)?.type === "powerstrip"
-      ) {
+      const upstreamDeviceId = junctionFeed?.upstreamSourceEndpoint.deviceId ?? feed.sourceEndpoint.deviceId;
+      if (upstreamDeviceId && devicesById.get(upstreamDeviceId)?.type === "powerstrip") {
         const nextVisitedRouteIds = new Set(visitedRouteIds);
         nextVisitedRouteIds.add(feed.attachment.route.id);
+        if (junctionFeed) nextVisitedRouteIds.add(junctionFeed.upstreamRoute.id);
         addPowerFlowToDevice(
-          feed.sourceEndpoint.deviceId,
+          upstreamDeviceId,
           `${idPrefix}-upstream`,
           nextVisitedDeviceIds,
           nextVisitedRouteIds,
