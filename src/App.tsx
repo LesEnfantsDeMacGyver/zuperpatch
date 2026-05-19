@@ -43,6 +43,7 @@ type LabelPosition = "top" | "right" | "bottom" | "left";
 type Mode = "select" | "scale" | "cable" | "device";
 type ConsumerSourceMode = "auto" | "manual";
 type ConsumerSourceType = "producer" | "powerstrip" | "powerCable";
+type ElectricalColorMode = "length" | "load";
 
 type CableRoute = {
   id: string;
@@ -169,6 +170,7 @@ type AutoSourceLinkRoute = {
 };
 
 type CableColorPath = {
+  loadRatio?: number;
   offsetPx: number;
   sourceBranchId?: string;
   sourcePointIndex?: number;
@@ -202,6 +204,7 @@ type PersistedProject = {
   zoom: number;
   floorPlanOpacity: number;
   animateOrphans: boolean;
+  electricalColorMode: ElectricalColorMode;
   mode: Mode;
   activeCable: CableType;
   activeDevice: DeviceType;
@@ -229,6 +232,9 @@ const maxUndoHistory = 160;
 const flowDashCyclePx = 52;
 const defaultPowerSourceSockets = 4;
 const defaultEthernetSwitchSockets = 8;
+const electricalReferenceVoltageV = 230;
+const electricalCordMaxLoadA = 10;
+const electricalCordMaxLoadW = electricalReferenceVoltageV * electricalCordMaxLoadA;
 
 const cableTypes: Record<CableType, CableConfig> = {
   ethernet: {
@@ -784,6 +790,10 @@ function lengthLabel(meters: number) {
 function powerLabel(watts: number) {
   if (watts >= 1000) return `${unit.format(watts / 1000)} kW`;
   return `${unit.format(watts)} W`;
+}
+
+function electricalLoadRatioForWatts(watts: number) {
+  return electricalCordMaxLoadW ? watts / electricalCordMaxLoadW : 0;
 }
 
 function countByDeviceType(devices: Device[], type: DeviceType) {
@@ -1642,6 +1652,8 @@ function App() {
   const [zoom, setZoom] = useState(1.1);
   const [floorPlanOpacity, setFloorPlanOpacity] = useState(1);
   const [animateOrphans, setAnimateOrphans] = useState(true);
+  const [electricalColorMode, setElectricalColorMode] =
+    useState<ElectricalColorMode>("length");
   const [rendering, setRendering] = useState(false);
   const [mode, setMode] = useState<Mode>("scale");
   const [activeCable, setActiveCable] = useState<CableType>("ethernet");
@@ -1722,6 +1734,7 @@ function App() {
         setZoom(project.zoom || 1.1);
         setFloorPlanOpacity(project.floorPlanOpacity ?? 1);
         setAnimateOrphans(project.animateOrphans ?? true);
+        setElectricalColorMode(project.electricalColorMode ?? "length");
         setMode(project.mode || "scale");
         setActiveCable(project.activeCable || "ethernet");
         setActiveDevice(project.activeDevice || "powerstrip");
@@ -1774,6 +1787,7 @@ function App() {
       zoom,
       floorPlanOpacity,
       animateOrphans,
+      electricalColorMode,
       mode,
       activeCable,
       activeDevice,
@@ -1804,6 +1818,7 @@ function App() {
     cables,
     calibration,
     devices,
+    electricalColorMode,
     floorPlanOpacity,
     hydrated,
     knownDistance,
@@ -2357,6 +2372,22 @@ function App() {
     selectedDevice?.type === "switch" &&
     selectedSwitchSocketCapacity > 0 &&
     selectedSwitchCableCount > selectedSwitchSocketCapacity;
+  const switchRequiredPowerW = useCallback(
+    (switchDevice: Device) =>
+      ethernetSwitchPoeStats.find((stats) => stats.switchId === switchDevice.id)
+        ?.totalRequiredPowerW ??
+      switchDevice.powerW ??
+      0,
+    [ethernetSwitchPoeStats],
+  );
+  const powerLoadWattsForDevice = useCallback(
+    (device: Device) => {
+      if (device.type === "switch") return switchRequiredPowerW(device);
+      if (device.type === "consumer") return device.powerW ?? 0;
+      return 0;
+    },
+    [switchRequiredPowerW],
+  );
   const currentEthernetAttachments = useMemo(
     () =>
       [
@@ -2440,6 +2471,230 @@ function App() {
           (powerstrip) => powerstrip.powerstripId === selectedDevice.id,
         )
       : undefined;
+  const powerstripLoadWattsById = useMemo(() => {
+    const loadCache = new Map<string, number>();
+
+    const loadForPowerstrip = (
+      powerstripId: string,
+      visitedPowerstripIds = new Set<string>(),
+    ): number => {
+      if (visitedPowerstripIds.has(powerstripId)) return 0;
+      if (loadCache.has(powerstripId)) return loadCache.get(powerstripId) ?? 0;
+
+      const nextVisitedPowerstripIds = new Set(visitedPowerstripIds);
+      nextVisitedPowerstripIds.add(powerstripId);
+      const countedDeviceIds = new Set<string>();
+      let totalW = 0;
+
+      const addDeviceLoad = (device: Device) => {
+        if (countedDeviceIds.has(device.id)) return;
+        countedDeviceIds.add(device.id);
+        totalW += powerLoadWattsForDevice(device);
+      };
+
+      consumerSourceAssignments.forEach((assignment) => {
+        if (
+          assignment.source?.type === "powerstrip" &&
+          assignment.source.id === powerstripId
+        ) {
+          addDeviceLoad(assignment.consumer);
+        }
+      });
+
+      directPowerConsumerAttachments.forEach((assignment) => {
+        const isFedByPowerstrip = assignment.attachments.some((attachment) => {
+          const sourceEndpoint = upstreamEndpointForPowerRoute(
+            attachment.route,
+            assignment.consumer.id,
+            devicesById,
+            cables,
+          );
+          return sourceEndpoint?.deviceId === powerstripId;
+        });
+        if (isFedByPowerstrip) addDeviceLoad(assignment.consumer);
+      });
+
+      powerstripSourceAssignments.forEach((assignment) => {
+        if (
+          assignment.source?.type === "powerstrip" &&
+          assignment.source.id === powerstripId
+        ) {
+          totalW += loadForPowerstrip(assignment.consumer.id, nextVisitedPowerstripIds);
+        }
+      });
+
+      devices
+        .filter((device) => device.type === "powerstrip" && device.id !== powerstripId)
+        .forEach((childPowerstrip) => {
+          const isFedByPowerstrip = resolveDeviceCableAttachments(
+            childPowerstrip,
+            cables,
+            "power",
+          ).some((attachment) => {
+            const sourceEndpoint = upstreamEndpointForPowerRoute(
+              attachment.route,
+              childPowerstrip.id,
+              devicesById,
+              cables,
+            );
+            return sourceEndpoint?.deviceId === powerstripId;
+          });
+          if (isFedByPowerstrip) {
+            totalW += loadForPowerstrip(childPowerstrip.id, nextVisitedPowerstripIds);
+          }
+        });
+
+      loadCache.set(powerstripId, totalW);
+      return totalW;
+    };
+
+    devices
+      .filter((device) => device.type === "powerstrip")
+      .forEach((powerstrip) => {
+        loadForPowerstrip(powerstrip.id);
+      });
+
+    return loadCache;
+  }, [
+    cables,
+    consumerSourceAssignments,
+    devices,
+    devicesById,
+    directPowerConsumerAttachments,
+    powerLoadWattsForDevice,
+    powerstripSourceAssignments,
+  ]);
+  const electricalRouteLoadRatios = useMemo(() => {
+    const ratios = new Map<string, number>();
+    const powerRoutes = cables.filter((route) => route.type === "power");
+
+    const routeFeedsPowerstrip = (route: CableRoute, powerstripId: string) =>
+      Boolean(
+        endpointForDevice(route, powerstripId) &&
+          upstreamEndpointForPowerRoute(route, powerstripId, devicesById, cables),
+      );
+
+    const powerstripDependsOnRoute = (
+      powerstripId: string,
+      routeId: string,
+      visitedRouteIds = new Set<string>(),
+      visitedPowerstripIds = new Set<string>(),
+    ): boolean => {
+      if (visitedPowerstripIds.has(powerstripId)) return false;
+      const powerstrip = devicesById.get(powerstripId);
+      if (!powerstrip || powerstrip.type !== "powerstrip") return false;
+
+      const nextVisitedPowerstripIds = new Set(visitedPowerstripIds);
+      nextVisitedPowerstripIds.add(powerstripId);
+
+      const directFeedDependsOnRoute = resolveDeviceCableAttachments(
+        powerstrip,
+        cables,
+        "power",
+      ).some(
+        (attachment) =>
+          routeFeedsPowerstrip(attachment.route, powerstripId) &&
+          routeDependsOnRoute(
+            attachment.route,
+            routeId,
+            visitedRouteIds,
+            nextVisitedPowerstripIds,
+          ),
+      );
+      if (directFeedDependsOnRoute) return true;
+
+      const assignment = powerstripSourceAssignments.find(
+        (candidate) => candidate.consumer.id === powerstripId,
+      );
+      const source = assignment?.source;
+      if (!source) return false;
+      if (source.type === "powerCable" && source.route) {
+        return routeDependsOnRoute(
+          source.route,
+          routeId,
+          visitedRouteIds,
+          nextVisitedPowerstripIds,
+        );
+      }
+      if (source.type === "powerstrip") {
+        return powerstripDependsOnRoute(
+          source.id,
+          routeId,
+          visitedRouteIds,
+          nextVisitedPowerstripIds,
+        );
+      }
+      return false;
+    };
+
+    function routeDependsOnRoute(
+      route: CableRoute,
+      routeId: string,
+      visitedRouteIds = new Set<string>(),
+      visitedPowerstripIds = new Set<string>(),
+    ): boolean {
+      if (route.id === routeId) return true;
+      if (visitedRouteIds.has(route.id)) return false;
+
+      const nextVisitedRouteIds = new Set(visitedRouteIds);
+      nextVisitedRouteIds.add(route.id);
+      const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById);
+      const sourceDevice = sourceEndpoint?.deviceId
+        ? devicesById.get(sourceEndpoint.deviceId)
+        : undefined;
+      if (sourceDevice?.type !== "powerstrip") return false;
+
+      return powerstripDependsOnRoute(
+        sourceDevice.id,
+        routeId,
+        nextVisitedRouteIds,
+        visitedPowerstripIds,
+      );
+    }
+
+    powerRoutes.forEach((route) => {
+      const countedDeviceIds = new Set<string>();
+      let totalW = 0;
+      const addLoad = (device: Device) => {
+        if (countedDeviceIds.has(device.id)) return;
+        countedDeviceIds.add(device.id);
+        totalW += powerLoadWattsForDevice(device);
+      };
+
+      directPowerConsumerAttachments.forEach((assignment) => {
+        if (
+          assignment.attachments.some((attachment) =>
+            routeDependsOnRoute(attachment.route, route.id),
+          )
+        ) {
+          addLoad(assignment.consumer);
+        }
+      });
+
+      consumerSourceAssignments.forEach((assignment) => {
+        const source = assignment.source;
+        if (!source) return;
+        if (source.type === "powerCable" && source.route) {
+          if (routeDependsOnRoute(source.route, route.id)) addLoad(assignment.consumer);
+          return;
+        }
+        if (source.type === "powerstrip" && powerstripDependsOnRoute(source.id, route.id)) {
+          addLoad(assignment.consumer);
+        }
+      });
+
+      ratios.set(route.id, electricalLoadRatioForWatts(totalW));
+    });
+
+    return ratios;
+  }, [
+    cables,
+    consumerSourceAssignments,
+    devicesById,
+    directPowerConsumerAttachments,
+    powerLoadWattsForDevice,
+    powerstripSourceAssignments,
+  ]);
   const attachedPowerPathPixelsToDeviceForColor = (
     device: Device,
     excludedRouteId?: string,
@@ -2531,6 +2786,12 @@ function App() {
   };
   const cableColorPathForRoute = (route: CableRoute): CableColorPath | undefined => {
     if (route.type !== "power") return undefined;
+    if (electricalColorMode === "load") {
+      return {
+        loadRatio: electricalRouteLoadRatios.get(route.id) ?? 0,
+        offsetPx: 0,
+      };
+    }
     const sourceEndpoint = routeEndpointReferences(route)
       .map((endpoint) => {
         const device = endpoint.deviceId ? devicesById.get(endpoint.deviceId) : undefined;
@@ -3056,15 +3317,6 @@ function App() {
     [cables, devicesById, directPowerConsumerAttachments],
   );
 
-  const switchRequiredPowerW = useCallback(
-    (switchDevice: Device) =>
-      ethernetSwitchPoeStats.find((stats) => stats.switchId === switchDevice.id)
-        ?.totalRequiredPowerW ??
-      switchDevice.powerW ??
-      0,
-    [ethernetSwitchPoeStats],
-  );
-
   const powerStats = useMemo(() => {
     const devicesById = new Map(devices.map((device) => [device.id, device]));
     const producerIdForAssignment = (assignment: ResolvedConsumerSource) => {
@@ -3305,6 +3557,7 @@ function App() {
     setZoom(project.zoom || 1.1);
     setFloorPlanOpacity(project.floorPlanOpacity ?? 1);
     setAnimateOrphans(project.animateOrphans ?? true);
+    setElectricalColorMode(project.electricalColorMode ?? "length");
     setMode(project.mode || "scale");
     setActiveCable(project.activeCable || "ethernet");
     setActiveDevice(project.activeDevice || "powerstrip");
@@ -3344,6 +3597,7 @@ function App() {
       zoom,
       floorPlanOpacity,
       animateOrphans,
+      electricalColorMode,
       mode,
       activeCable,
       activeDevice,
@@ -3413,6 +3667,7 @@ function App() {
     setZoom(project.zoom || 1.1);
     setFloorPlanOpacity(project.floorPlanOpacity ?? 1);
     setAnimateOrphans(project.animateOrphans ?? true);
+    setElectricalColorMode(project.electricalColorMode ?? "length");
     setMode(project.mode || "scale");
     setActiveCable(project.activeCable || "ethernet");
     setActiveDevice(project.activeDevice || "powerstrip");
@@ -3469,6 +3724,7 @@ function App() {
       zoom,
       floorPlanOpacity,
       animateOrphans,
+      electricalColorMode,
       mode,
       activeCable,
       activeDevice,
@@ -3518,6 +3774,7 @@ function App() {
     cables,
     calibration,
     devices,
+    electricalColorMode,
     floorPlanOpacity,
     hydrated,
     knownDistance,
@@ -5239,6 +5496,25 @@ function App() {
 
         <section className="tool-group view-controls" aria-label="View controls">
           <h2>View</h2>
+          <div className="field">
+            <span>Electrical color</span>
+            <div className="compact-segmented" role="group" aria-label="Electrical color mode">
+              <button
+                className={electricalColorMode === "length" ? "active" : ""}
+                type="button"
+                onClick={() => setElectricalColorMode("length")}
+              >
+                Length
+              </button>
+              <button
+                className={electricalColorMode === "load" ? "active" : ""}
+                type="button"
+                onClick={() => setElectricalColorMode("load")}
+              >
+                Load
+              </button>
+            </div>
+          </div>
           <div className="field slider-field">
             <span>Zoom</span>
             <div className="slider-row zoom-slider-row">
@@ -5517,8 +5793,23 @@ function App() {
                       : routedArc?.arcPixels ??
                         sourceArcPixels(startPoint, endPoint, sourceArcControl(startPoint, endPoint));
                   const maxLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
-                  const startRatio = maxLengthPx ? upstreamPixels / maxLengthPx : 0;
-                  const endRatio = maxLengthPx ? (upstreamPixels + arcPixels) / maxLengthPx : 0;
+                  const loadWatts =
+                    assignment.consumer.type === "powerstrip"
+                      ? powerstripLoadWattsById.get(assignment.consumer.id) ?? 0
+                      : powerLoadWattsForDevice(assignment.consumer);
+                  const loadRatio = electricalLoadRatioForWatts(loadWatts);
+                  const startRatio =
+                    electricalColorMode === "load"
+                      ? loadRatio
+                      : maxLengthPx
+                        ? upstreamPixels / maxLengthPx
+                        : 0;
+                  const endRatio =
+                    electricalColorMode === "load"
+                      ? loadRatio
+                      : maxLengthPx
+                        ? (upstreamPixels + arcPixels) / maxLengthPx
+                        : 0;
                   return (
                     <AutoSourceLink
                       end={end}
@@ -5999,6 +6290,7 @@ function CableRouteView({
   const labelPath = routePathData(labelPathPoints(points));
   const maxLengthPx = displayPixelsPerMeter * config.maxLengthM;
   const ratioForPixels = (pixels: number) => (maxLengthPx ? pixels / maxLengthPx : 0);
+  const colorRatioForPixels = (pixels: number) => colorPath?.loadRatio ?? ratioForPixels(pixels);
   const trunkPixels = routePixels(points);
   const sourcePointIndex = colorPath?.sourcePointIndex ?? 0;
   const sourceTrunkPixels =
@@ -6033,9 +6325,9 @@ function CableRouteView({
       {points.slice(1).map((point, index) => {
         const start = points[index];
         const segmentLength = distance(start, point);
-        const startRatio = ratioForPixels(colorDistanceForTrunkPixels(travelled));
+        const startRatio = colorRatioForPixels(colorDistanceForTrunkPixels(travelled));
         travelled += segmentLength;
-        const endRatio = ratioForPixels(colorDistanceForTrunkPixels(travelled));
+        const endRatio = colorRatioForPixels(colorDistanceForTrunkPixels(travelled));
         const gradientId = `${config.id}-${start.x}-${start.y}-${point.x}-${point.y}-${draft ? "draft" : "route"}`;
         return (
           <g key={`${point.x}-${point.y}-${index}`}>
@@ -6087,8 +6379,8 @@ function CableRouteView({
                     y1={start.y}
                     y2={point.y}
                   >
-                    <stop offset="0%" stopColor={colorAtRatio(ratioForPixels(branchColorDistance(branchTravelled)))} />
-                    <stop offset="100%" stopColor={colorAtRatio(ratioForPixels(branchColorDistance(branchTravelled + segmentLength)))} />
+                    <stop offset="0%" stopColor={colorAtRatio(colorRatioForPixels(branchColorDistance(branchTravelled)))} />
+                    <stop offset="100%" stopColor={colorAtRatio(colorRatioForPixels(branchColorDistance(branchTravelled + segmentLength)))} />
                   </linearGradient>
                 </defs>
                 <line
