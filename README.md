@@ -109,6 +109,14 @@ Le travail est sauvegardé automatiquement dans le navigateur.
 
 On peut aussi télécharger un fichier projet et le recharger plus tard pour archiver une version, transférer une préparation, ou reprendre le plan depuis un autre poste.
 
+## Projet exemple
+
+Un plan complet est disponible dans `samples/plan.zuperpatch.json`.
+
+Il sert de référence réaliste pour tester les longueurs, les charges électriques, les ports Ethernet, les multiprises et la nomenclature. Les captures de ce document sont générées à partir de ce fichier pour montrer l’outil dans une situation déjà remplie.
+
+Pour l’ouvrir, lancez l’application puis utilisez le bouton `Load`.
+
 ## Pour qui
 
 Cet outil vise les équipes qui préparent des installations techniques avant intervention:
