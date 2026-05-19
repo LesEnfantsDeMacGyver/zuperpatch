@@ -160,6 +160,14 @@ type FlowPathSegment = {
   start: Point;
 };
 
+type AutoSourceLinkRoute = {
+  arcPixels: number;
+  control: Point;
+  end: Point;
+  id: string;
+  start: Point;
+};
+
 type CableColorPath = {
   offsetPx: number;
   sourceBranchId?: string;
@@ -935,7 +943,11 @@ function consumerSourcePriority(source: ConsumerSource) {
   return 2;
 }
 
-function sourceArcControl(start: Point, end: Point) {
+function sourceArcControl(
+  start: Point,
+  end: Point,
+  options: { direction?: number; offsetScale?: number } = {},
+) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const segmentLength = Math.hypot(dx, dy) || 1;
@@ -943,10 +955,12 @@ function sourceArcControl(start: Point, end: Point) {
     x: start.x + dx / 2,
     y: start.y + dy / 2,
   };
-  const offset = Math.min(72, Math.max(22, segmentLength * 0.45));
+  const direction = options.direction && options.direction < 0 ? -1 : 1;
+  const offsetScale = options.offsetScale ?? 1;
+  const offset = Math.min(96, Math.max(18, segmentLength * 0.45 * offsetScale));
   const control = {
-    x: midpoint.x - (dy / segmentLength) * offset,
-    y: midpoint.y + (dx / segmentLength) * offset,
+    x: midpoint.x - (dy / segmentLength) * offset * direction,
+    y: midpoint.y + (dx / segmentLength) * offset * direction,
   };
   return control;
 }
@@ -959,23 +973,148 @@ function sourceArcPath(start: Point, end: Point) {
   return sourceArcPathThroughControl(start, sourceArcControl(start, end), end);
 }
 
-function sourceArcPixels(start: Point, end: Point) {
-  const control = sourceArcControl(start, end);
-  const pointAt = (t: number) => {
-    const mt = 1 - t;
-    return {
-      x: mt * mt * start.x + 2 * mt * t * control.x + t * t * end.x,
-      y: mt * mt * start.y + 2 * mt * t * control.y + t * t * end.y,
-    };
+function sourceArcPointAt(start: Point, control: Point, end: Point, t: number) {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * start.x + 2 * mt * t * control.x + t * t * end.x,
+    y: mt * mt * start.y + 2 * mt * t * control.y + t * t * end.y,
   };
+}
+
+function sourceArcSamplePoints(start: Point, control: Point, end: Point, steps = 16) {
+  return Array.from({ length: steps + 1 }, (_item, index) =>
+    sourceArcPointAt(start, control, end, index / steps),
+  );
+}
+
+function sourceArcPixels(start: Point, end: Point, control = sourceArcControl(start, end)) {
+  const points = sourceArcSamplePoints(start, control, end);
   let length = 0;
-  let previous = start;
-  for (let index = 1; index <= 16; index += 1) {
-    const point = pointAt(index / 16);
+  let previous = points[0];
+  for (const point of points.slice(1)) {
     length += distance(previous, point);
     previous = point;
   }
   return length;
+}
+
+function orientation(a: Point, b: Point, c: Point) {
+  return (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
+}
+
+function segmentsIntersect(firstStart: Point, firstEnd: Point, secondStart: Point, secondEnd: Point) {
+  if (
+    distance(firstStart, secondStart) < 1 ||
+    distance(firstStart, secondEnd) < 1 ||
+    distance(firstEnd, secondStart) < 1 ||
+    distance(firstEnd, secondEnd) < 1
+  ) {
+    return false;
+  }
+  const firstOrientation = orientation(firstStart, firstEnd, secondStart);
+  const secondOrientation = orientation(firstStart, firstEnd, secondEnd);
+  const thirdOrientation = orientation(secondStart, secondEnd, firstStart);
+  const fourthOrientation = orientation(secondStart, secondEnd, firstEnd);
+  return firstOrientation * secondOrientation < 0 && thirdOrientation * fourthOrientation < 0;
+}
+
+function pointToSegmentDistance(point: Point, segmentStart: Point, segmentEnd: Point) {
+  const dx = segmentEnd.x - segmentStart.x;
+  const dy = segmentEnd.y - segmentStart.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return distance(point, segmentStart);
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      ((point.x - segmentStart.x) * dx + (point.y - segmentStart.y) * dy) / lengthSquared,
+    ),
+  );
+  return distance(point, {
+    x: segmentStart.x + dx * t,
+    y: segmentStart.y + dy * t,
+  });
+}
+
+function sampledPathDistance(first: Point[], second: Point[]) {
+  let closest = Number.POSITIVE_INFINITY;
+  for (const point of first.slice(1, -1)) {
+    for (let index = 0; index < second.length - 1; index += 1) {
+      closest = Math.min(closest, pointToSegmentDistance(point, second[index], second[index + 1]));
+    }
+  }
+  return closest;
+}
+
+function sampledPathsIntersect(first: Point[], second: Point[]) {
+  for (let firstIndex = 0; firstIndex < first.length - 1; firstIndex += 1) {
+    for (let secondIndex = 0; secondIndex < second.length - 1; secondIndex += 1) {
+      if (
+        segmentsIntersect(
+          first[firstIndex],
+          first[firstIndex + 1],
+          second[secondIndex],
+          second[secondIndex + 1],
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function routeAutoSourceLinks(
+  links: Array<{ end: Point; id: string; start: Point }>,
+): Map<string, AutoSourceLinkRoute> {
+  const routes = new Map<string, AutoSourceLinkRoute>();
+  const placed: Array<{ points: Point[]; route: AutoSourceLinkRoute }> = [];
+  const candidates = [
+    { direction: 1, offsetScale: 0.85 },
+    { direction: -1, offsetScale: 0.85 },
+    { direction: 1, offsetScale: 1.15 },
+    { direction: -1, offsetScale: 1.15 },
+    { direction: 1, offsetScale: 0.55 },
+    { direction: -1, offsetScale: 0.55 },
+    { direction: 1, offsetScale: 1.45 },
+    { direction: -1, offsetScale: 1.45 },
+  ];
+
+  [...links]
+    .sort((first, second) => distance(second.start, second.end) - distance(first.start, first.end))
+    .forEach((link) => {
+      const best = candidates
+        .map((candidate) => {
+          const control = sourceArcControl(link.start, link.end, candidate);
+          const points = sourceArcSamplePoints(link.start, control, link.end, 18);
+          const score = placed.reduce((sum, existing) => {
+            const crossingPenalty = sampledPathsIntersect(points, existing.points) ? 500 : 0;
+            const proximity = sampledPathDistance(points, existing.points);
+            const proximityPenalty = proximity < 24 ? 24 - proximity : 0;
+            const sharedEndpointPenalty =
+              distance(link.start, existing.route.start) < 1 ||
+              distance(link.end, existing.route.end) < 1 ||
+              distance(link.start, existing.route.end) < 1 ||
+              distance(link.end, existing.route.start) < 1
+                ? 8
+                : 0;
+            return sum + crossingPenalty + proximityPenalty + sharedEndpointPenalty;
+          }, candidate.offsetScale * 0.2);
+          return { control, points, score };
+        })
+        .sort((first, second) => first.score - second.score)[0];
+      const route = {
+        arcPixels: sourceArcPixels(link.start, link.end, best.control),
+        control: best.control,
+        end: link.end,
+        id: link.id,
+        start: link.start,
+      };
+      routes.set(link.id, route);
+      placed.push({ points: best.points, route });
+    });
+
+  return routes;
 }
 
 function samePoint(first: Point, second: Point) {
@@ -4201,6 +4340,57 @@ function App() {
     selectedCommonDeviceType !== "consumer"
       ? "mixed"
       : selectedCommonSourceSelection ?? "mixed";
+  const visibleAutoSourceAssignments = useMemo(
+    () =>
+      [...currentConsumerSourceAssignments, ...currentPowerstripSourceAssignments].filter(
+        (
+          assignment,
+        ): assignment is ResolvedConsumerSource & { source: ConsumerSource; targetPoint: Point } => {
+          if (!assignment.autoAssigned || !assignment.source || !assignment.targetPoint) {
+            return false;
+          }
+          const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
+          const isFlowing = selectedAutoSourceFlowIds.has(linkId);
+          return (
+            (assignment.consumer.id !== selectedDevice?.id || isFlowing) &&
+            !(
+              selectedDevice?.type === "producer" &&
+              !isFlowing &&
+              (assignment.source.type === "producer"
+                ? assignment.source.id === selectedDevice.id
+                : assignment.source.type === "powerstrip"
+                  ? producerIdForPowerstripWithAuto(assignment.source.id) === selectedDevice.id
+                  : assignment.source.route &&
+                    upstreamProducerIdForPowerRoute(
+                      assignment.source.route,
+                      devicesById,
+                      cables,
+                    ) === selectedDevice.id)
+            )
+          );
+        },
+      ),
+    [
+      cables,
+      currentConsumerSourceAssignments,
+      currentPowerstripSourceAssignments,
+      devicesById,
+      producerIdForPowerstripWithAuto,
+      selectedAutoSourceFlowIds,
+      selectedDevice,
+    ],
+  );
+  const routedAutoSourceLinks = useMemo(
+    () =>
+      routeAutoSourceLinks(
+        visibleAutoSourceAssignments.map((assignment) => ({
+          end: assignment.targetPoint,
+          id: autoSourceLinkId(assignment.consumer.id, assignment.source),
+          start: assignment.consumer.point,
+        })),
+      ),
+    [visibleAutoSourceAssignments],
+  );
 
   function beginCablePointDrag(routeId: string, event: PointerEvent<SVGCircleElement>) {
     event.stopPropagation();
@@ -5203,49 +5393,24 @@ function App() {
                 />
               )}
 
-              {(!hoveredPlanCableType || hoveredPlanCableType === "power") && [
-                ...currentConsumerSourceAssignments,
-                ...currentPowerstripSourceAssignments,
-              ]
-                .filter((assignment) => {
-                  if (!assignment.autoAssigned || !assignment.source || !assignment.targetPoint) {
-                    return false;
-                  }
-                  const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
-                  const isFlowing = selectedAutoSourceFlowIds.has(linkId);
-                  return (
-                    (assignment.consumer.id !== selectedDevice?.id || isFlowing) &&
-                    !(
-                      selectedDevice?.type === "producer" &&
-                      !isFlowing &&
-                      (assignment.source.type === "producer"
-                        ? assignment.source.id === selectedDevice.id
-                        : assignment.source.type === "powerstrip"
-                          ? producerIdForPowerstripWithAuto(assignment.source.id) ===
-                            selectedDevice.id
-                          : assignment.source.route &&
-                            upstreamProducerIdForPowerRoute(
-                              assignment.source.route,
-                              devicesById,
-                              cables,
-                            ) === selectedDevice.id)
-                    )
-                  );
-                })
-                .map((assignment) => {
+              {(!hoveredPlanCableType || hoveredPlanCableType === "power") &&
+                visibleAutoSourceAssignments.map((assignment) => {
                   const startPoint = assignment.consumer.point;
-                  const endPoint = assignment.targetPoint as Point;
-                  const start = toDisplayPoint(startPoint);
-                  const end = toDisplayPoint(endPoint);
+                  const endPoint = assignment.targetPoint;
                   const upstreamPixels = powerPathPixelsToAssignmentSource(assignment);
-                  const arcPixels = sourceArcPixels(startPoint, endPoint);
+                  const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
+                  const routedArc = routedAutoSourceLinks.get(linkId);
+                  const start = toDisplayPoint(routedArc?.start ?? startPoint);
+                  const end = toDisplayPoint(routedArc?.end ?? endPoint);
+                  const control = toDisplayPoint(
+                    routedArc?.control ?? sourceArcControl(startPoint, endPoint),
+                  );
+                  const arcPixels =
+                    routedArc?.arcPixels ??
+                    sourceArcPixels(startPoint, endPoint, sourceArcControl(startPoint, endPoint));
                   const maxLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
                   const startRatio = maxLengthPx ? upstreamPixels / maxLengthPx : 0;
                   const endRatio = maxLengthPx ? (upstreamPixels + arcPixels) / maxLengthPx : 0;
-                  const linkId = autoSourceLinkId(
-                    assignment.consumer.id,
-                    assignment.source as ConsumerSource,
-                  );
                   return (
                     <AutoSourceLink
                       end={end}
@@ -5253,7 +5418,7 @@ function App() {
                       flowing={selectedAutoSourceFlowIds.has(linkId)}
                       id={linkId}
                       key={linkId}
-                      pathData={sourceArcPath(start, end)}
+                      pathData={sourceArcPathThroughControl(start, control, end)}
                       start={start}
                       startRatio={startRatio}
                     />
