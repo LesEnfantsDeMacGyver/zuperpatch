@@ -1291,7 +1291,7 @@ function upstreamPowerPathPixelsToDevice(
 
   const nextVisitedDeviceIds = new Set(visitedDeviceIds);
   nextVisitedDeviceIds.add(deviceId);
-  return resolveDeviceCableAttachments(device, routes, "power")
+  const candidates = resolveDeviceCableAttachments(device, routes, "power")
     .map((attachment) => {
       if (visitedRouteIds.has(attachment.route.id)) return undefined;
       const sourceEndpoint = upstreamEndpointForPowerRoute(
@@ -1312,12 +1312,26 @@ function upstreamPowerPathPixelsToDevice(
         nextVisitedRouteIds,
       );
       if (sourcePixels === undefined) return undefined;
-      return sourcePixels + routePixels(
-        routePathBetweenEndpoints(attachment.route, sourceEndpoint, targetEndpoint),
-      );
+      return {
+        pixels:
+          sourcePixels +
+          routePixels(
+            routePathBetweenEndpoints(attachment.route, sourceEndpoint, targetEndpoint),
+          ),
+        reliableSource: Boolean(sourceEndpoint.deviceId),
+      };
     })
-    .filter((pixels): pixels is number => pixels !== undefined)
-    .sort((a, b) => a - b)[0];
+    .filter((candidate): candidate is { pixels: number; reliableSource: boolean } =>
+      Boolean(candidate),
+    );
+  const reliableCandidates = candidates.filter((candidate) => candidate.reliableSource);
+  if (reliableCandidates.length > 0) {
+    return reliableCandidates.sort((a, b) => a.pixels - b.pixels)[0].pixels;
+  }
+  if (device.type === "powerstrip" && candidates.length > 0) {
+    return candidates.sort((a, b) => b.pixels - a.pixels)[0].pixels;
+  }
+  return candidates.sort((a, b) => a.pixels - b.pixels)[0]?.pixels;
 }
 
 function closestCompatibleDeviceForCablePoint(
@@ -2129,13 +2143,108 @@ function App() {
       : undefined;
   const selectedPowerstripSocketCapacity =
     selectedDevice?.type === "powerstrip" ? socketCapacityForDevice(selectedDevice) : 0;
+  const attachedPowerPathPixelsToDeviceForColor = (
+    device: Device,
+    excludedRouteId?: string,
+  ) => {
+    const candidates = resolveDeviceCableAttachments(device, cables, "power")
+      .filter((attachment) => attachment.route.id !== excludedRouteId)
+      .map((attachment) => {
+        const sourceEndpoint = upstreamEndpointForPowerRoute(
+          attachment.route,
+          device.id,
+          devicesById,
+          cables,
+        );
+        const targetEndpoint = endpointForDevice(attachment.route, device.id);
+        if (!sourceEndpoint || !targetEndpoint) return undefined;
+        const sourcePixels = upstreamPowerPathPixelsToEndpoint(
+          sourceEndpoint,
+          devicesById,
+          cables,
+        );
+        if (sourcePixels === undefined) return undefined;
+        return {
+          pixels:
+            sourcePixels +
+            routePixels(
+              routePathBetweenEndpoints(attachment.route, sourceEndpoint, targetEndpoint),
+            ),
+          reliableSource: Boolean(sourceEndpoint.deviceId),
+        };
+      })
+      .filter((candidate): candidate is { pixels: number; reliableSource: boolean } =>
+        Boolean(candidate),
+      );
+    const reliableCandidates = candidates.filter((candidate) => candidate.reliableSource);
+    if (reliableCandidates.length > 0) {
+      return reliableCandidates.sort((a, b) => a.pixels - b.pixels)[0].pixels;
+    }
+    if (device.type === "powerstrip" && candidates.length > 0) {
+      return candidates.sort((a, b) => b.pixels - a.pixels)[0].pixels;
+    }
+    return candidates.sort((a, b) => a.pixels - b.pixels)[0]?.pixels;
+  };
+  const nearbyPowerCablePixelsToDeviceForColor = (
+    device: Device,
+    excludedRouteId?: string,
+  ) => {
+    if (!pixelsPerMeter) return undefined;
+    const maxDistancePx = pixelsPerMeter * 1.5;
+    return cables
+      .filter((route) => route.type === "power" && route.id !== excludedRouteId)
+      .flatMap((route) =>
+        routeEndpointReferences(route)
+          .filter((endpoint) => {
+            if (endpoint.deviceId === device.id) return false;
+            if (!endpoint.deviceId) return true;
+            return devicesById.get(endpoint.deviceId)?.type !== "consumer";
+          })
+          .map((endpoint) => {
+            const distanceToDevice = distance(device.point, endpoint.point);
+            if (distanceToDevice > maxDistancePx) return undefined;
+            const upstreamPixels = upstreamPowerPathPixelsToRouteEndpoint(
+              route,
+              endpoint,
+              devicesById,
+              cables,
+            );
+            if (upstreamPixels === undefined) return undefined;
+            return {
+              distanceToDevice,
+              pixels: upstreamPixels + distanceToDevice,
+            };
+          }),
+      )
+      .filter((candidate): candidate is { distanceToDevice: number; pixels: number } =>
+        Boolean(candidate),
+      )
+      .sort((a, b) => a.distanceToDevice - b.distanceToDevice)[0]?.pixels;
+  };
+  const powerPathPixelsToDeviceForColor = (deviceId: string, excludedRouteId?: string) => {
+    const device = devicesById.get(deviceId);
+    if (!device) return undefined;
+    if (device.type === "producer") return 0;
+    const attachedPixels = attachedPowerPathPixelsToDeviceForColor(device, excludedRouteId);
+    if (attachedPixels !== undefined) return attachedPixels;
+    if (device.type === "powerstrip") {
+      return nearbyPowerCablePixelsToDeviceForColor(device, excludedRouteId);
+    }
+    return undefined;
+  };
   const cableColorPathForRoute = (route: CableRoute): CableColorPath | undefined => {
     if (route.type !== "power") return undefined;
     const sourceEndpoint = routeEndpointReferences(route)
-      .map((endpoint) => ({
-        endpoint,
-        upstreamPixels: upstreamPowerPathPixelsToEndpoint(endpoint, devicesById, cables),
-      }))
+      .map((endpoint) => {
+        const device = endpoint.deviceId ? devicesById.get(endpoint.deviceId) : undefined;
+        return {
+          endpoint,
+          upstreamPixels:
+            device?.type === "powerstrip"
+              ? powerPathPixelsToDeviceForColor(endpoint.deviceId as string, route.id)
+              : upstreamPowerPathPixelsToEndpoint(endpoint, devicesById, cables),
+        };
+      })
       .filter(
         (candidate): candidate is {
           endpoint: RouteEndpointReference;
