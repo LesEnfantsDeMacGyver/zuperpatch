@@ -649,6 +649,53 @@ function routeMaterialPixels(route: CableRoute) {
   return routeCablePathPixels(route).reduce((sum, pixels) => sum + pixels, 0);
 }
 
+function deviceDisplayLabel(device: Device | undefined) {
+  if (!device) return undefined;
+  return device.name?.trim() || deviceTypes[device.type].label;
+}
+
+function routeEndpointLabel(
+  endpoint: RouteEndpointReference | undefined,
+  devicesById: Map<string, Device>,
+  fallback: string,
+) {
+  if (!endpoint?.deviceId) return fallback;
+  return deviceDisplayLabel(devicesById.get(endpoint.deviceId)) ?? fallback;
+}
+
+function cableBomEntries(route: CableRoute, devices: Device[]) {
+  const devicesById = new Map(devices.map((device) => [device.id, device]));
+  const startEndpoint = routeEndpointReferences(route).find((endpoint) => endpoint.pointIndex === 0);
+  const startLabel = routeEndpointLabel(startEndpoint, devicesById, "Cable start");
+  const branches = route.branches ?? [];
+  if (branches.length > 0) {
+    return branches.map((branch, index) => {
+      const endpoint = branch.points.length
+        ? {
+            branchId: branch.id,
+            branchPointIndex: branch.points.length - 1,
+            deviceId: route.endpointDeviceIds?.branches?.[branch.id],
+            point: branch.points[branch.points.length - 1],
+          }
+        : undefined;
+      const endLabel = routeEndpointLabel(endpoint, devicesById, `Split end ${index + 1}`);
+      return {
+        label: `${startLabel} → ${endLabel}`,
+        note: "Split route: includes shared trunk plus this branch.",
+        pixels: routePixels(route.points) + routePixels(branchPathPoints(route, branch)),
+      };
+    });
+  }
+  const endEndpoint = routeEndpointReferences(route).find(
+    (endpoint) => endpoint.pointIndex === route.points.length - 1,
+  );
+  return [{
+    label: `${startLabel} → ${routeEndpointLabel(endEndpoint, devicesById, "Cable end")}`,
+    note: undefined,
+    pixels: routePixels(route.points),
+  }];
+}
+
 function colorAtRatio(ratio: number) {
   if (ratio < 0.65) return "#10b981";
   if (ratio < 0.9) return "#f59e0b";
@@ -2933,17 +2980,12 @@ function App() {
       addCableGroup(stat);
       cables
         .filter((route) => route.type === stat.id)
-        .forEach((route, routeIndex) => {
-          const pathLengths = routeCablePathPixels(route);
-          pathLengths.forEach((pathPixels, pathIndex) => {
-            const suffix =
-              pathLengths.length > 1 ? ` cable ${pathIndex + 1}` : "";
+        .forEach((route) => {
+          cableBomEntries(route, devices).forEach((entry) => {
             addItem(
-              `Route ${routeIndex + 1}${suffix}`,
-              pixelsPerMeter ? lengthLabel(pathPixels / pixelsPerMeter) : "Scale not set",
-              pathLengths.length > 1
-                ? "Split route: includes shared trunk plus this branch."
-                : undefined,
+              entry.label,
+              pixelsPerMeter ? lengthLabel(entry.pixels / pixelsPerMeter) : "Scale not set",
+              entry.note,
             );
           });
         });
