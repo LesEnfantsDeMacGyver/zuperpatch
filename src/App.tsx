@@ -129,6 +129,11 @@ type DraggingCablePoint = {
   detachedDeviceId?: string;
 };
 
+type CablePointReference = DraggingCablePoint & {
+  page: number;
+  point: Point;
+};
+
 type SelectedCablePoint = DraggingCablePoint;
 type ViewPosition = { scrollLeft: number; scrollTop: number };
 type SpacePanDrag = {
@@ -230,6 +235,7 @@ const maxZoom = 5;
 const zoomStep = 0.2;
 const maxUndoHistory = 160;
 const flowDashCyclePx = 52;
+const cablePointSnapRadiusPx = 11;
 const defaultPowerSourceSockets = 4;
 const defaultEthernetSwitchSockets = 8;
 const electricalReferenceVoltageV = 230;
@@ -608,6 +614,110 @@ function routeWithEndpointDeviceId(
     };
   }
   return route;
+}
+
+function cablePointKey(point: DraggingCablePoint) {
+  return [
+    point.routeId,
+    point.branchId ?? "",
+    point.branchPointIndex ?? "",
+    point.pointIndex ?? "",
+  ].join(":");
+}
+
+function cablePointReferencesForRoute(route: CableRoute): CablePointReference[] {
+  return [
+    ...route.points.map((point, pointIndex) => ({
+      page: route.page,
+      point,
+      pointIndex,
+      routeId: route.id,
+    })),
+    ...(route.branches ?? []).flatMap((branch) =>
+      branch.points.map((point, branchPointIndex) => ({
+        branchId: branch.id,
+        branchPointIndex,
+        page: route.page,
+        point,
+        routeId: route.id,
+      })),
+    ),
+  ];
+}
+
+function cablePointReferencesForRoutes(routes: CableRoute[]) {
+  return routes.flatMap(cablePointReferencesForRoute);
+}
+
+function cablePointForReference(route: CableRoute, reference: DraggingCablePoint) {
+  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
+    const branch = route.branches?.find(
+      (currentBranch) => currentBranch.id === reference.branchId,
+    );
+    return branch?.points[reference.branchPointIndex];
+  }
+  return reference.pointIndex !== undefined ? route.points[reference.pointIndex] : undefined;
+}
+
+function isEndpointCablePoint(route: CableRoute, reference: DraggingCablePoint) {
+  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
+    const branch = route.branches?.find(
+      (currentBranch) => currentBranch.id === reference.branchId,
+    );
+    return Boolean(branch && reference.branchPointIndex === branch.points.length - 1);
+  }
+  if (reference.pointIndex === undefined) return false;
+  if ((route.branches ?? []).length > 0) return reference.pointIndex === 0;
+  return reference.pointIndex === 0 || reference.pointIndex === route.points.length - 1;
+}
+
+function routeWithCablePoint(route: CableRoute, reference: DraggingCablePoint, point: Point) {
+  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
+    return {
+      ...route,
+      branches: route.branches?.map((branch) =>
+        branch.id === reference.branchId
+          ? {
+              ...branch,
+              points: branch.points.map((branchPoint, index) =>
+                index === reference.branchPointIndex ? point : branchPoint,
+              ),
+            }
+          : branch,
+      ),
+    };
+  }
+  if (reference.pointIndex === undefined) return route;
+  return {
+    ...route,
+    points: route.points.map((routePoint, index) =>
+      index === reference.pointIndex ? point : routePoint,
+    ),
+  };
+}
+
+function closestCablePointSnap(
+  point: Point,
+  routes: CableRoute[],
+  page: number,
+  excludedPointKeys: Set<string>,
+  excludedRouteId: string,
+  viewScale: number,
+) {
+  const snapDistance = cablePointSnapRadiusPx / viewScale;
+  return cablePointReferencesForRoutes(routes)
+    .filter(
+      (reference) =>
+        reference.page === page &&
+        reference.routeId !== excludedRouteId &&
+        !excludedPointKeys.has(cablePointKey(reference)),
+    )
+    .map((reference) => ({
+      distancePx: distance(point, reference.point),
+      point: reference.point,
+    }))
+    .filter((candidate) => candidate.distancePx <= snapDistance)
+    .sort((a, b) => a.distancePx - b.distancePx)[0]?.point;
 }
 
 function endpointDeviceIdsForDraft(deviceIds: Array<string | undefined>) {
@@ -4169,81 +4279,98 @@ function App() {
         }
         return excludedDeviceIds;
       };
-      setCables((current) =>
-        current.map((route) => {
-          if (route.id !== draggingCablePoint.routeId) return route;
-          let endpointDevice: Device | undefined;
-          let editedRoute =
-            draggingCablePoint.branchId !== undefined
-              ? {
-                  ...route,
-                  branches: route.branches?.map((branch) =>
-                    branch.id === draggingCablePoint.branchId
-                      ? {
-                          ...branch,
-                          points: branch.points.map((branchPoint, index) => {
-                            if (index !== draggingCablePoint.branchPointIndex) {
-                              return branchPoint;
-                            }
-                            const isEndpoint = index === branch.points.length - 1;
-                            const editedPoint = shouldConstrain
-                              ? constrainTo45Degrees(
-                                  index === 0
-                                    ? route.points[route.points.length - 1]
-                                    : branch.points[index - 1],
-                                  point,
-                                )
-                              : point;
-                            endpointDevice = isEndpoint
-                              ? closestCompatibleDeviceForCablePoint(
-                                  editedPoint,
-                                  route,
-                                  devices,
-                                  pixelsPerMeter,
-                                  excludedDeviceIdsForRoute(route),
-                                  draggingCablePoint,
-                                )
-                              : undefined;
-                            return endpointDevice ? endpointDevice.point : editedPoint;
-                          }),
-                        }
-                      : branch,
-                  ),
-                }
-              : {
-                  ...route,
-                  points: route.points.map((routePoint, index) => {
-                    if (index !== draggingCablePoint.pointIndex) return routePoint;
-                    const isEndpoint = index === 0 || index === route.points.length - 1;
-                    const editedPoint =
-                      shouldConstrain && draggingCablePoint.pointIndex !== undefined
-                        ? constrainEditedRoutePoint(
-                            route.points,
-                            draggingCablePoint.pointIndex,
-                            point,
-                          )
-                        : point;
-                    endpointDevice = isEndpoint
-                      ? closestCompatibleDeviceForCablePoint(
-                          editedPoint,
-                          route,
-                          devices,
-                          pixelsPerMeter,
-                          excludedDeviceIdsForRoute(route),
-                          draggingCablePoint,
-                        )
-                      : undefined;
-                    return endpointDevice ? endpointDevice.point : editedPoint;
-                  }),
-                };
-          editedRoute = routeWithEndpointDeviceId(
-            editedRoute,
-            draggingCablePoint,
-            endpointDevice?.id,
-          );
+      setCables((current) => {
+        const activeRoute = current.find((route) => route.id === draggingCablePoint.routeId);
+        const activePoint = activeRoute
+          ? cablePointForReference(activeRoute, draggingCablePoint)
+          : undefined;
+        if (!activeRoute || !activePoint) return current;
+
+        const movingPointReferences = cablePointReferencesForRoutes(current).filter(
+          (reference) =>
+            reference.page === activeRoute.page && samePoint(reference.point, activePoint),
+        );
+        const movingPointKeys = new Set(movingPointReferences.map(cablePointKey));
+        if (!movingPointKeys.has(cablePointKey(draggingCablePoint))) {
+          movingPointReferences.push({
+            page: activeRoute.page,
+            point: activePoint,
+            ...draggingCablePoint,
+          });
+          movingPointKeys.add(cablePointKey(draggingCablePoint));
+        }
+
+        let editedPoint = point;
+        if (shouldConstrain) {
+          if (
+            draggingCablePoint.branchId !== undefined &&
+            draggingCablePoint.branchPointIndex !== undefined
+          ) {
+            const branch = activeRoute.branches?.find(
+              (currentBranch) => currentBranch.id === draggingCablePoint.branchId,
+            );
+            const anchor =
+              draggingCablePoint.branchPointIndex === 0
+                ? activeRoute.points[activeRoute.points.length - 1]
+                : branch?.points[draggingCablePoint.branchPointIndex - 1];
+            editedPoint = anchor ? constrainTo45Degrees(anchor, point) : point;
+          } else if (draggingCablePoint.pointIndex !== undefined) {
+            editedPoint = constrainEditedRoutePoint(
+              activeRoute.points,
+              draggingCablePoint.pointIndex,
+              point,
+            );
+          }
+        }
+
+        const endpointDevice = isEndpointCablePoint(activeRoute, draggingCablePoint)
+          ? closestCompatibleDeviceForCablePoint(
+              editedPoint,
+              activeRoute,
+              devices,
+              pixelsPerMeter,
+              excludedDeviceIdsForRoute(activeRoute),
+              draggingCablePoint,
+            )
+          : undefined;
+        const snappedCablePoint = endpointDevice
+          ? undefined
+          : closestCablePointSnap(
+              editedPoint,
+              current,
+              activeRoute.page,
+              movingPointKeys,
+              activeRoute.id,
+              viewScale,
+            );
+        const finalPoint = endpointDevice?.point ?? snappedCablePoint ?? editedPoint;
+        const movingReferencesByRoute = new Map<string, CablePointReference[]>();
+        movingPointReferences.forEach((reference) => {
+          movingReferencesByRoute.set(reference.routeId, [
+            ...(movingReferencesByRoute.get(reference.routeId) ?? []),
+            reference,
+          ]);
+        });
+
+        return current.map((route) => {
+          const movingReferences = movingReferencesByRoute.get(route.id);
+          if (!movingReferences) return route;
+          let editedRoute = route;
+          movingReferences.forEach((reference) => {
+            editedRoute = routeWithCablePoint(editedRoute, reference, finalPoint);
+            if (isEndpointCablePoint(editedRoute, reference)) {
+              editedRoute = routeWithEndpointDeviceId(
+                editedRoute,
+                reference,
+                cablePointKey(reference) === cablePointKey(draggingCablePoint)
+                  ? endpointDevice?.id
+                  : undefined,
+              );
+            }
+          });
           return editedRoute;
-        }),
-      );
+        });
+      });
       return;
     }
     if (draggingDevice) {
