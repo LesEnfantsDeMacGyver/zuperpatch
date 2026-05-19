@@ -406,6 +406,10 @@ function boundsFromPoints(points: Point[], padding = 0): SelectionBounds | undef
   };
 }
 
+function boundsFromRects(bounds: Array<SelectionBounds | undefined>) {
+  return mergeBounds(bounds);
+}
+
 function mergeBounds(bounds: Array<SelectionBounds | undefined>) {
   const cleanBounds = bounds.filter((bound): bound is SelectionBounds => Boolean(bound));
   if (cleanBounds.length === 0) return undefined;
@@ -442,6 +446,105 @@ function routePoints(route: CableRoute) {
 
 function routeBounds(route: CableRoute) {
   return boundsFromPoints(routePoints(route), 7);
+}
+
+function textLength(text: string) {
+  return Array.from(text).length;
+}
+
+function deviceTextBounds(
+  origin: Point,
+  text: string,
+  labelX: number,
+  labelY: number,
+  textAnchor: "start" | "middle" | "end",
+  fontPx: number,
+  viewScale: number,
+): SelectionBounds | undefined {
+  if (!text) return undefined;
+  const outlinePx = 1;
+  const widthPx = Math.max(8, textLength(text) * fontPx * 0.52) + outlinePx * 2;
+  const ascentPx = fontPx * 0.85 + outlinePx;
+  const descentPx = fontPx * 0.25 + outlinePx;
+  const labelModelX = origin.x + labelX / viewScale;
+  const labelModelY = origin.y + labelY / viewScale;
+  const width = widthPx / viewScale;
+  const ascent = ascentPx / viewScale;
+  const descent = descentPx / viewScale;
+  const minX =
+    textAnchor === "start"
+      ? labelModelX
+      : textAnchor === "end"
+        ? labelModelX - width
+        : labelModelX - width / 2;
+  const maxX =
+    textAnchor === "start"
+      ? labelModelX + width
+      : textAnchor === "end"
+        ? labelModelX
+        : labelModelX + width / 2;
+
+  return {
+    maxX,
+    maxY: labelModelY + descent,
+    minX,
+    minY: labelModelY - ascent,
+  };
+}
+
+function deviceSelectionBounds(
+  device: Device,
+  primaryLabel: string,
+  secondaryLabel: string,
+  viewScale: number,
+) {
+  const labelPosition = device.labelPosition ?? "bottom";
+  const labelX = labelPosition === "right" ? 15 : labelPosition === "left" ? -15 : 0;
+  const labelY =
+    labelPosition === "top"
+      ? -30
+      : labelPosition === "bottom"
+        ? 24
+        : 4;
+  const subLabelY =
+    labelPosition === "top"
+      ? -17
+      : labelPosition === "bottom"
+        ? 37
+        : 17;
+  const labelAnchor =
+    labelPosition === "right"
+      ? "start"
+      : labelPosition === "left"
+        ? "end"
+        : "middle";
+  const iconRadius = 14 / viewScale;
+  return boundsFromRects([
+    {
+      maxX: device.point.x + iconRadius,
+      maxY: device.point.y + iconRadius,
+      minX: device.point.x - iconRadius,
+      minY: device.point.y - iconRadius,
+    },
+    deviceTextBounds(
+      device.point,
+      primaryLabel,
+      labelX,
+      labelY,
+      labelAnchor,
+      11,
+      viewScale,
+    ),
+    deviceTextBounds(
+      device.point,
+      secondaryLabel,
+      labelX,
+      subLabelY,
+      labelAnchor,
+      10,
+      viewScale,
+    ),
+  ]);
 }
 
 function rotatePointAround(point: Point, center: Point, angleRadians: number): Point {
@@ -2413,10 +2516,6 @@ function App() {
     .map((routeId) => cables.find((route) => route.id === routeId))
     .filter((route): route is CableRoute => Boolean(route));
   const selectedObjectCount = selectedDevices.length + selectedCables.length;
-  const selectedObjectBounds = mergeBounds([
-    ...selectedDevices.map((device) => boundsFromPoints([device.point], 30)),
-    ...selectedCables.map(routeBounds),
-  ]);
   const selectedDevice = selectedDevices.length === 1 ? selectedDevices[0] : undefined;
   const selectedDeviceCount = selectedDevices.length;
   const selectedCommonDeviceType =
@@ -2822,6 +2921,56 @@ function App() {
           (powerstrip) => powerstrip.powerstripId === selectedDevice.id,
         )
       : undefined;
+  const deviceLabelParts = useCallback(
+    (device: Device) => {
+      const config = deviceTypes[device.type];
+      const primaryLabel =
+        device.type === "producer" ||
+        device.type === "consumer" ||
+        device.type === "switch" ||
+        device.type === "ethernetClient"
+          ? device.name || config.label
+          : config.label;
+      const secondaryLabel =
+        device.type === "producer"
+          ? powerLabel(device.availablePowerW ?? 0)
+          : device.type === "switch"
+            ? (() => {
+                const stats = ethernetSwitchPoeStats.find(
+                  (switchStats) => switchStats.switchId === device.id,
+                );
+                if (!stats) return "";
+                const socketText = `${stats.cableCount}/${stats.socketCapacity} ports`;
+                return stats.totalRequiredPowerW
+                  ? `${socketText}, ${powerLabel(stats.totalRequiredPowerW)} required`
+                  : socketText;
+              })()
+            : device.type === "ethernetClient"
+              ? `${powerLabel(device.poePowerW ?? 0)} PoE`
+              : device.type === "consumer"
+                ? powerLabel(device.powerW ?? 0)
+                : device.type === "powerstrip"
+                  ? (() => {
+                      const stats = powerstripConnectionStats.find(
+                        (powerstrip) => powerstrip.powerstripId === device.id,
+                      );
+                      const socketCapacity = stats?.socketCapacity ?? 0;
+                      return `${socketCapacity} sockets (${
+                        stats?.freeSocketCount ?? 0
+                      } free)`;
+                    })()
+                  : "";
+      return { primaryLabel, secondaryLabel };
+    },
+    [ethernetSwitchPoeStats, powerstripConnectionStats],
+  );
+  const selectedObjectBounds = mergeBounds([
+    ...selectedDevices.map((device) => {
+      const { primaryLabel, secondaryLabel } = deviceLabelParts(device);
+      return deviceSelectionBounds(device, primaryLabel, secondaryLabel, viewScale);
+    }),
+    ...selectedCables.map(routeBounds),
+  ]);
   const powerstripLoadWattsById = useMemo(() => {
     const loadCache = new Map<string, number>();
 
@@ -5319,7 +5468,10 @@ function App() {
     const selectedDragDevices = devices.filter((device) => deviceIds.includes(device.id));
     const selectedDragCables = cables.filter((route) => cableIds.includes(route.id));
     const bounds = mergeBounds([
-      ...selectedDragDevices.map((device) => boundsFromPoints([device.point], 30)),
+      ...selectedDragDevices.map((device) => {
+        const { primaryLabel, secondaryLabel } = deviceLabelParts(device);
+        return deviceSelectionBounds(device, primaryLabel, secondaryLabel, viewScale);
+      }),
       ...selectedDragCables.map(routeBounds),
     ]);
     if (!bounds || deviceIds.length + cableIds.length === 0) return;
@@ -6902,42 +7054,7 @@ function App() {
               {currentDevices.map((device) => {
                 const config = deviceTypes[device.type];
                 const Icon = config.icon;
-                const primaryLabel =
-                  device.type === "producer" ||
-                  device.type === "consumer" ||
-                  device.type === "switch" ||
-                  device.type === "ethernetClient"
-                    ? device.name || config.label
-                    : config.label;
-                const secondaryLabel =
-                  device.type === "producer"
-                    ? powerLabel(device.availablePowerW ?? 0)
-                    : device.type === "switch"
-                      ? (() => {
-                          const stats = ethernetSwitchPoeStats.find(
-                            (switchStats) => switchStats.switchId === device.id,
-                          );
-                          if (!stats) return "";
-                          const socketText = `${stats.cableCount}/${stats.socketCapacity} ports`;
-                          return stats.totalRequiredPowerW
-                            ? `${socketText}, ${powerLabel(stats.totalRequiredPowerW)} required`
-                            : socketText;
-                        })()
-                    : device.type === "ethernetClient"
-                      ? `${powerLabel(device.poePowerW ?? 0)} PoE`
-                    : device.type === "consumer"
-                      ? powerLabel(device.powerW ?? 0)
-                      : device.type === "powerstrip"
-                        ? (() => {
-                            const stats = powerstripConnectionStats.find(
-                              (powerstrip) => powerstrip.powerstripId === device.id,
-                            );
-                            const socketCapacity = stats?.socketCapacity ?? 0;
-                            return `${socketCapacity} sockets (${
-                              stats?.freeSocketCount ?? 0
-                            } free)`;
-                          })()
-                      : "";
+                const { primaryLabel, secondaryLabel } = deviceLabelParts(device);
                 const labelPosition = device.labelPosition ?? "bottom";
                 const labelX =
                   labelPosition === "right" ? 15 : labelPosition === "left" ? -15 : 0;
