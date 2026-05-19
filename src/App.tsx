@@ -2843,18 +2843,6 @@ function App() {
     (sum, assignment) => sum + (assignment.consumer.powerW ?? 0),
     0,
   );
-  const poweredConsumerIds = useMemo(
-    () =>
-      new Set(
-        [
-          ...consumerSourceAssignments
-            .filter((assignment) => Boolean(assignment.source))
-            .map((assignment) => assignment.consumer.id),
-          ...directlyPoweredConsumerIds,
-        ],
-      ),
-    [consumerSourceAssignments, directlyPoweredConsumerIds],
-  );
   const orphanDeviceIds = useMemo(() => {
     const orphanIds = new Set<string>();
     const assignmentHasPowerSource = (assignment: ResolvedConsumerSource | undefined) => {
@@ -3565,7 +3553,7 @@ function App() {
       const shouldConstrain = event.shiftKey || isShiftPressed;
       const excludedDeviceIdsForRoute = (route: CableRoute) => {
         const excludedDeviceIds =
-          route.type === "power" ? new Set(poweredConsumerIds) : new Set<string>();
+          route.type === "power" ? new Set(directlyPoweredConsumerIds) : new Set<string>();
         if (draggingCablePoint.detachedDeviceId) {
           excludedDeviceIds.add(draggingCablePoint.detachedDeviceId);
         }
@@ -3908,7 +3896,7 @@ function App() {
       (!canAddCablePointForDevice(activeCable, targetDevice, cables, routeDraftDeviceIds) ||
         (activeCable === "power" &&
           targetDevice.type === "consumer" &&
-          poweredConsumerIds.has(targetDevice.id)))
+          directlyPoweredConsumerIds.has(targetDevice.id)))
     ) {
       abortCableDraft();
       return;
@@ -3961,7 +3949,7 @@ function App() {
     if (
       activeCable === "power" &&
       device.type === "consumer" &&
-      poweredConsumerIds.has(device.id)
+      directlyPoweredConsumerIds.has(device.id)
     ) {
       return undefined;
     }
