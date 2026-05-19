@@ -151,6 +151,7 @@ type Measurement = {
 type SelectionRect = {
   start: Point;
   end: Point;
+  pointerId: number;
   toggle: boolean;
 };
 type SelectionBounds = {
@@ -4544,13 +4545,72 @@ function App() {
     }
   }
 
-  function pointerFromEvent(event: PointerEvent) {
+  function pointerFromEvent(event: PointerEvent, clampToPage = true) {
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
-    return {
-      x: Math.min(Math.max((event.clientX - rect.left) / viewScale, 0), modelPageSize.width),
-      y: Math.min(Math.max((event.clientY - rect.top) / viewScale, 0), modelPageSize.height),
+    const point = {
+      x: (event.clientX - rect.left) / viewScale,
+      y: (event.clientY - rect.top) / viewScale,
     };
+    if (!clampToPage) return point;
+    return {
+      x: Math.min(Math.max(point.x, 0), modelPageSize.width),
+      y: Math.min(Math.max(point.y, 0), modelPageSize.height),
+    };
+  }
+
+  function beginMarqueeSelection(event: PointerEvent<Element>) {
+    if (event.button !== 0) return;
+    const point = pointerFromEvent(event, false);
+    setSelectedCablePoint(null);
+    setSelectionRect({
+      start: point,
+      end: point,
+      pointerId: event.pointerId,
+      toggle: event.metaKey || event.ctrlKey,
+    });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    if (!event.metaKey && !event.ctrlKey) {
+      selectObjects([], []);
+    }
+  }
+
+  function finishMarqueeSelection(event: PointerEvent<Element>) {
+    if (!selectionRect || selectionRect.pointerId !== event.pointerId) return false;
+    const endPoint = pointerFromEvent(event, false);
+    const bounds = normalizeBounds(selectionRect.start, endPoint);
+    const didDrag = distance(selectionRect.start, endPoint) > 4;
+    if (didDrag) {
+      const selectedFromRectDevices = currentDevices
+        .filter((device) => boundsIntersect(bounds, boundsFromPoints([device.point], 12) as SelectionBounds))
+        .map((device) => device.id);
+      const selectedFromRectCables = currentCables
+        .filter((route) => {
+          const boundsForRoute = routeBounds(route);
+          return boundsForRoute ? boundsIntersect(bounds, boundsForRoute) : false;
+        })
+        .map((route) => route.id);
+      if (selectionRect.toggle) {
+        const deviceSet = new Set(selectedDeviceIds);
+        selectedFromRectDevices.forEach((deviceId) => {
+          if (deviceSet.has(deviceId)) deviceSet.delete(deviceId);
+          else deviceSet.add(deviceId);
+        });
+        const cableSet = new Set(selectedCableIds);
+        selectedFromRectCables.forEach((routeId) => {
+          if (cableSet.has(routeId)) cableSet.delete(routeId);
+          else cableSet.add(routeId);
+        });
+        selectObjects([...deviceSet], [...cableSet]);
+      } else {
+        selectObjects(selectedFromRectDevices, selectedFromRectCables);
+      }
+    }
+    setSelectionRect(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    return true;
   }
 
   function handlePlanScroll(event: UIEvent<HTMLDivElement>) {
@@ -4647,12 +4707,8 @@ function App() {
   function handlePointerDown(event: PointerEvent) {
     const point = pointerFromEvent(event);
     if (mode === "select") {
-      setSelectedCablePoint(null);
-      setSelectionRect({ start: point, end: point, toggle: event.metaKey || event.ctrlKey });
-      event.currentTarget.setPointerCapture(event.pointerId);
-      if (!event.metaKey && !event.ctrlKey) {
-        selectObjects([], []);
-      }
+      event.stopPropagation();
+      beginMarqueeSelection(event);
       return;
     }
     setSelectedId(null);
@@ -4858,7 +4914,9 @@ function App() {
       return;
     }
     if (selectionRect) {
-      setSelectionRect({ ...selectionRect, end: point });
+      if (selectionRect.pointerId !== event.pointerId) return;
+      event.stopPropagation();
+      setSelectionRect({ ...selectionRect, end: pointerFromEvent(event, false) });
       return;
     }
     if (draggingCablePoint) {
@@ -5055,39 +5113,10 @@ function App() {
       return;
     }
     if (selectionRect) {
-      const bounds = normalizeBounds(selectionRect.start, pointerFromEvent(event));
-      const didDrag = distance(selectionRect.start, pointerFromEvent(event)) > 4;
-      if (didDrag) {
-        const selectedFromRectDevices = currentDevices
-          .filter((device) => boundsIntersect(bounds, boundsFromPoints([device.point], 12) as SelectionBounds))
-          .map((device) => device.id);
-        const selectedFromRectCables = currentCables
-          .filter((route) => {
-            const boundsForRoute = routeBounds(route);
-            return boundsForRoute ? boundsIntersect(bounds, boundsForRoute) : false;
-          })
-          .map((route) => route.id);
-        if (selectionRect.toggle) {
-          const deviceSet = new Set(selectedDeviceIds);
-          selectedFromRectDevices.forEach((deviceId) => {
-            if (deviceSet.has(deviceId)) deviceSet.delete(deviceId);
-            else deviceSet.add(deviceId);
-          });
-          const cableSet = new Set(selectedCableIds);
-          selectedFromRectCables.forEach((routeId) => {
-            if (cableSet.has(routeId)) cableSet.delete(routeId);
-            else cableSet.add(routeId);
-          });
-          selectObjects([...deviceSet], [...cableSet]);
-        } else {
-          selectObjects(selectedFromRectDevices, selectedFromRectCables);
-        }
+      if (finishMarqueeSelection(event)) {
+        event.stopPropagation();
+        return;
       }
-      setSelectionRect(null);
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      return;
     }
     if (rotatingSelection && rotatingSelection.pointerId === event.pointerId) {
       setRotatingSelection(null);
@@ -5112,6 +5141,27 @@ function App() {
     setRouteDraft([]);
     setRouteDraftDeviceIds([]);
     setCursorPoint(null);
+  }
+
+  function handlePlanScrollPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (mode !== "select" || isSpacePressed || event.target !== event.currentTarget) return;
+    beginMarqueeSelection(event);
+  }
+
+  function handlePlanScrollPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (
+      !selectionRect ||
+      selectionRect.pointerId !== event.pointerId ||
+      !event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      return;
+    }
+    setSelectionRect({ ...selectionRect, end: pointerFromEvent(event, false) });
+  }
+
+  function handlePlanScrollPointerUp(event: PointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    finishMarqueeSelection(event);
   }
 
   function abortCableDraft() {
@@ -6576,8 +6626,12 @@ function App() {
             .filter(Boolean)
             .join(" ")}
           onPointerCancelCapture={finishSpacePan}
+          onPointerCancel={handlePlanScrollPointerUp}
+          onPointerDown={handlePlanScrollPointerDown}
           onPointerDownCapture={handleSpacePanPointerDown}
+          onPointerMove={handlePlanScrollPointerMove}
           onPointerMoveCapture={handleSpacePanPointerMove}
+          onPointerUp={handlePlanScrollPointerUp}
           onPointerUpCapture={finishSpacePan}
           onScroll={handlePlanScroll}
           onWheel={handlePlanWheel}
