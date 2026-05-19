@@ -316,6 +316,25 @@ h2 {
   min-height: 34px;
 }
 
+.connected-segmented {
+  background: var(--color-field);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  gap: 0;
+  overflow: hidden;
+  padding: 2px;
+}
+
+.connected-segmented button {
+  border: 0;
+  border-radius: 6px;
+  min-height: 34px;
+}
+
+.connected-segmented button:hover:not(:disabled) {
+  background: var(--color-hover-bg);
+}
+
 .wide-segment {
   grid-column: 1 / -1;
 }

@@ -5498,7 +5498,11 @@ function App() {
           <h2>View</h2>
           <div className="field">
             <span>Electrical color</span>
-            <div className="compact-segmented" role="group" aria-label="Electrical color mode">
+            <div
+              className="compact-segmented connected-segmented"
+              role="group"
+              aria-label="Electrical color mode"
+            >
               <button
                 className={electricalColorMode === "length" ? "active" : ""}
                 type="button"
