@@ -2424,6 +2424,125 @@ function App() {
           );
         });
     };
+    const addPowerFlowFromDevice = (
+      sourceDeviceId: string,
+      idPrefix: string,
+      visitedDeviceIds = new Set<string>(),
+      visitedRouteIds = new Set<string>(),
+    ) => {
+      if (visitedDeviceIds.has(sourceDeviceId)) return;
+      const sourceDevice = devicesById.get(sourceDeviceId);
+      if (!sourceDevice) return;
+      const nextVisitedDeviceIds = new Set(visitedDeviceIds);
+      nextVisitedDeviceIds.add(sourceDeviceId);
+
+      consumerSourceAssignments
+        .filter(
+          (assignment) =>
+            assignment.source?.type === "powerstrip" &&
+            assignment.source.id === sourceDeviceId &&
+            assignment.targetPoint,
+        )
+        .forEach((assignment) => {
+          const sourceOffsetPx =
+            upstreamPowerPathPixelsToDevice(sourceDeviceId, devicesById, cables) ?? 0;
+          const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
+          addPathData(
+            `${idPrefix}-arc-${assignment.consumer.id}`,
+            sourceArcPath(
+              scalePoint(sourceDevice.point, viewScale),
+              scalePoint(assignment.consumer.point, viewScale),
+            ),
+            "power",
+            true,
+            maxPowerLengthPx ? sourceOffsetPx / maxPowerLengthPx : 0,
+          );
+        });
+
+      resolveDeviceCableAttachments(sourceDevice, cables, "power").forEach((attachment) => {
+        if (visitedRouteIds.has(attachment.route.id)) return;
+        const sourceEndpoint = endpointForDevice(attachment.route, sourceDeviceId);
+        if (!sourceEndpoint) return;
+        routeEndpointReferences(attachment.route).forEach((targetEndpoint, index) => {
+          if (!targetEndpoint.deviceId || targetEndpoint.deviceId === sourceDeviceId) return;
+          const targetDevice = devicesById.get(targetEndpoint.deviceId);
+          if (!targetDevice || targetDevice.type === "producer") return;
+          const upstreamEndpoint = upstreamEndpointForPowerRoute(
+            attachment.route,
+            targetDevice.id,
+            devicesById,
+            cables,
+          );
+          if (upstreamEndpoint?.deviceId !== sourceDeviceId) return;
+          const sourceOffsetPx =
+            upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
+          addPath(
+            `${idPrefix}-${attachment.route.id}-${index}`,
+            routePathBetweenEndpoints(attachment.route, sourceEndpoint, targetEndpoint),
+            "power",
+            sourceOffsetPx,
+          );
+          if (targetDevice.type === "powerstrip") {
+            const nextVisitedRouteIds = new Set(visitedRouteIds);
+            nextVisitedRouteIds.add(attachment.route.id);
+            addPowerFlowFromDevice(
+              targetDevice.id,
+              `${idPrefix}-${targetDevice.id}`,
+              nextVisitedDeviceIds,
+              nextVisitedRouteIds,
+            );
+          }
+        });
+      });
+    };
+    const addPowerCableAssignmentFromSelectedSource = (assignment: ResolvedConsumerSource) => {
+      if (
+        selectedDevice.type !== "producer" ||
+        assignment.source?.type !== "powerCable" ||
+        !assignment.source.route ||
+        !assignment.targetPoint ||
+        upstreamProducerIdForPowerRoute(assignment.source.route, devicesById, cables) !==
+          selectedDevice.id
+      ) {
+        return;
+      }
+      const targetEndpoint = nearestRouteEndpoint(assignment.source.route, assignment.targetPoint);
+      const sourceEndpoint = targetEndpoint
+        ? upstreamEndpointForPowerRoute(
+            assignment.source.route,
+            targetEndpoint.deviceId ?? "",
+            devicesById,
+            cables,
+          ) ?? preferredPowerSourceEndpoint(assignment.source.route, devicesById)
+        : undefined;
+      if (!targetEndpoint || !sourceEndpoint) return;
+      const sourceOffsetPx =
+        upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
+      const arcStartPixels =
+        upstreamPowerPathPixelsToRouteEndpoint(
+          assignment.source.route,
+          targetEndpoint,
+          devicesById,
+          cables,
+        ) ?? 0;
+      const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
+      addPath(
+        `power-source-assignment-${assignment.source.route.id}-${assignment.consumer.id}`,
+        routePathBetweenEndpoints(assignment.source.route, sourceEndpoint, targetEndpoint),
+        "power",
+        sourceOffsetPx,
+      );
+      addPathData(
+        `power-source-assignment-arc-${assignment.consumer.id}`,
+        sourceArcPath(
+          scalePoint(targetEndpoint.point, viewScale),
+          scalePoint(assignment.consumer.point, viewScale),
+        ),
+        "power",
+        true,
+        maxPowerLengthPx ? arcStartPixels / maxPowerLengthPx : 0,
+      );
+    };
 
     if (selectedDevice.type === "consumer") {
       const directAttachments = resolveDeviceCableAttachments(selectedDevice, cables, "power");
@@ -2511,13 +2630,8 @@ function App() {
     } else if (selectedDevice.type === "powerstrip") {
       addPowerFlowToDevice(selectedDevice.id, "power-strip");
     } else if (selectedDevice.type === "producer") {
-      resolveDeviceCableAttachments(selectedDevice, cables, "power").forEach((attachment) => {
-        addRouteFromDevice(
-          attachment.route,
-          selectedDevice.id,
-          `power-source-${attachment.route.id}`,
-        );
-      });
+      addPowerFlowFromDevice(selectedDevice.id, "power-source");
+      consumerSourceAssignments.forEach(addPowerCableAssignmentFromSelectedSource);
     } else if (selectedDevice.type === "ethernetClient") {
       if (selectedEthernetClientAssignment) {
         const sourceEndpoint = endpointForDevice(
@@ -2562,6 +2676,7 @@ function App() {
     return paths;
   }, [
     cables,
+    consumerSourceAssignments,
     devicesById,
     pixelsPerMeter,
     selectedConsumerAssignment,
@@ -4926,7 +5041,22 @@ function App() {
                     assignment.autoAssigned &&
                     assignment.source &&
                     assignment.targetPoint &&
-                    assignment.consumer.id !== selectedDevice?.id,
+                    assignment.consumer.id !== selectedDevice?.id &&
+                    !(
+                      selectedDevice?.type === "producer" &&
+                      (assignment.source.type === "powerstrip"
+                        ? upstreamProducerIdForPowerstrip(
+                            assignment.source.id,
+                            devicesById,
+                            cables,
+                          ) === selectedDevice.id
+                        : assignment.source.route &&
+                          upstreamProducerIdForPowerRoute(
+                            assignment.source.route,
+                            devicesById,
+                            cables,
+                          ) === selectedDevice.id)
+                    ),
                 )
                 .map((assignment) => {
                   const startPoint = assignment.consumer.point;
