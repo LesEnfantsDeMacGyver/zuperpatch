@@ -2822,6 +2822,29 @@ function App() {
   );
   const orphanDeviceIds = useMemo(() => {
     const orphanIds = new Set<string>();
+    const assignmentHasPowerSource = (assignment: ResolvedConsumerSource | undefined) => {
+      const source = assignment?.source;
+      if (!source) return false;
+      if (source.type === "powerstrip") {
+        return Boolean(upstreamProducerIdForPowerstrip(source.id, devicesById, cables));
+      }
+      return Boolean(source.route && upstreamProducerIdForPowerRoute(source.route, devicesById, cables));
+    };
+    const consumerHasPowerSource = (consumer: Device) => {
+      const directAttachment = directPowerConsumerAttachments.find(
+        (assignment) => assignment.consumer.id === consumer.id,
+      );
+      if (
+        directAttachment?.attachments.some((attachment) =>
+          upstreamProducerIdForPowerRoute(attachment.route, devicesById, cables),
+        )
+      ) {
+        return true;
+      }
+      return assignmentHasPowerSource(
+        consumerSourceAssignments.find((assignment) => assignment.consumer.id === consumer.id),
+      );
+    };
     const ethernetSwitchCableCounts = new Map<string, number>();
     ethernetSwitchAttachments.forEach((attachment) => {
       ethernetSwitchCableCounts.set(
@@ -2838,26 +2861,15 @@ function App() {
         producer.attachments.length,
       ]),
     );
-    const powerstripStatsById = new Map(
-      powerstripConnectionStats.map((powerstrip) => [
-        powerstrip.powerstripId,
-        powerstrip,
-      ]),
-    );
-
     devices.forEach((device) => {
       let connected = false;
 
       if (device.type === "producer") {
         connected = (producerCableCounts.get(device.id) ?? 0) > 0;
       } else if (device.type === "powerstrip") {
-        connected = (powerstripStatsById.get(device.id)?.electricalCableCount ?? 0) > 0;
+        connected = Boolean(upstreamProducerIdForPowerstrip(device.id, devicesById, cables));
       } else if (device.type === "consumer") {
-        connected =
-          poweredConsumerIds.has(device.id) ||
-          resolveDeviceCableAttachments(device, cables, "power").length > 0 ||
-          resolveDeviceCableAttachments(device, cables, "ethernet").length > 0 ||
-          resolveDeviceCableAttachments(device, cables, "xlr").length > 0;
+        connected = consumerHasPowerSource(device);
       } else if (device.type === "switch") {
         connected = (ethernetSwitchCableCounts.get(device.id) ?? 0) > 0;
       } else if (device.type === "ethernetClient") {
@@ -2870,12 +2882,13 @@ function App() {
     return orphanIds;
   }, [
     cables,
+    consumerSourceAssignments,
     devices,
+    devicesById,
+    directPowerConsumerAttachments,
     ethernetClientAttachments,
     ethernetSwitchAttachments,
-    powerstripConnectionStats,
     producerPowerCableAttachments,
-    poweredConsumerIds,
   ]);
 
   async function handleFile(file: File | null) {
