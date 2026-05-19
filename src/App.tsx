@@ -1,7 +1,5 @@
 import {
   Cable,
-  ChevronLeft,
-  ChevronRight,
   CircuitBoard,
   Download,
   EthernetPort,
@@ -1901,7 +1899,7 @@ function App() {
 
         setPdfName(project.pdfName || "");
         setPdfDataUrl(project.pdfDataUrl);
-        setPageNumber(project.pageNumber || 1);
+        setPageNumber(1);
         setPageCount(project.pageCount || 0);
         setPageSize(project.pageSize || { width: 840, height: 640 });
         setZoom(project.zoom || 1.1);
@@ -1925,7 +1923,7 @@ function App() {
             if (!cancelled) {
               setPdfDoc(document);
               setPageCount(document.numPages);
-              setPageNumber((page) => Math.min(Math.max(page, 1), document.numPages));
+              setPageNumber(1);
             }
           } catch {
             if (!cancelled) {
@@ -3863,7 +3861,7 @@ function App() {
 
     setPdfName(project.pdfName || "");
     setPdfDataUrl(project.pdfDataUrl);
-    setPageNumber(project.pageNumber || 1);
+    setPageNumber(1);
     setPageCount(project.pageCount || 0);
     setPageSize(project.pageSize || { width: 840, height: 640 });
     setZoom(project.zoom || 1.1);
@@ -3891,7 +3889,7 @@ function App() {
       }).promise;
       setPdfDoc(document);
       setPageCount(document.numPages);
-      setPageNumber(Math.min(Math.max(project.pageNumber || 1, 1), document.numPages));
+      setPageNumber(1);
       return;
     }
 
@@ -3973,7 +3971,7 @@ function App() {
 
     setPdfName(project.pdfName || "");
     setPdfDataUrl(project.pdfDataUrl);
-    setPageNumber(project.pageNumber || 1);
+    setPageNumber(1);
     setPageCount(project.pageCount || 0);
     setPageSize(project.pageSize || { width: 840, height: 640 });
     setZoom(project.zoom || 1.1);
@@ -4013,7 +4011,7 @@ function App() {
         }).promise;
         setPdfDoc(document);
         setPageCount(document.numPages);
-        setPageNumber(Math.min(Math.max(project.pageNumber || 1, 1), document.numPages));
+        setPageNumber(1);
       } catch {
         setStorageNotice("Undo restored the plan, but the saved PDF could not be reopened.");
       }
@@ -4150,8 +4148,7 @@ function App() {
         pageSize.height,
       );
       const baseName = (pdfName || "zuperpatch").replace(/\.pdf$/i, "");
-      const pageSuffix = pageCount > 1 ? `-page-${pageNumber}` : "";
-      const fileName = `${baseName}-plan${pageSuffix}.pdf`;
+      const fileName = `${baseName}-plan.pdf`;
       const url = URL.createObjectURL(pdf.output("blob"));
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -4262,8 +4259,6 @@ function App() {
     addLine("Bill of Materials", 18, "bold");
     addLine(pdfName ? `Project: ${pdfName}` : "Project: Untitled ZuperPatch! plan");
     addLine(`Generated: ${new Date().toLocaleString()}`);
-    addLine(`Pages: ${pageCount || 1}`);
-
     addSection("Cable");
     stats.forEach((stat) => {
       addCableGroup(stat);
@@ -5998,28 +5993,6 @@ function App() {
 
       <section className="workspace" aria-label="Floor plan workspace">
         <header className="topbar">
-          <div className="page-controls">
-            <button
-              aria-label="Previous page"
-              disabled={!pdfDoc || pageNumber <= 1}
-              type="button"
-              onClick={() => setPageNumber((page) => Math.max(1, page - 1))}
-            >
-              <ChevronLeft aria-hidden="true" />
-            </button>
-            <span>
-              Page {pageNumber}
-              {pageCount ? ` of ${pageCount}` : ""}
-            </span>
-            <button
-              aria-label="Next page"
-              disabled={!pdfDoc || pageNumber >= pageCount}
-              type="button"
-              onClick={() => setPageNumber((page) => Math.min(pageCount, page + 1))}
-            >
-              <ChevronRight aria-hidden="true" />
-            </button>
-          </div>
           <div className="action-strip">
             <button type="button" onClick={downloadProject}>
               <Download aria-hidden="true" />
