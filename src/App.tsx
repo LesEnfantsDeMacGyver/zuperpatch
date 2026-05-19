@@ -5798,18 +5798,18 @@ function App() {
                       ? powerstripLoadWattsById.get(assignment.consumer.id) ?? 0
                       : powerLoadWattsForDevice(assignment.consumer);
                   const loadRatio = electricalLoadRatioForWatts(loadWatts);
+                  const sourceLengthRatio = maxLengthPx ? upstreamPixels / maxLengthPx : 0;
+                  const consumerLengthRatio = maxLengthPx
+                    ? (upstreamPixels + arcPixels) / maxLengthPx
+                    : 0;
                   const startRatio =
                     electricalColorMode === "load"
                       ? loadRatio
-                      : maxLengthPx
-                        ? upstreamPixels / maxLengthPx
-                        : 0;
+                      : consumerLengthRatio;
                   const endRatio =
                     electricalColorMode === "load"
                       ? loadRatio
-                      : maxLengthPx
-                        ? (upstreamPixels + arcPixels) / maxLengthPx
-                        : 0;
+                      : sourceLengthRatio;
                   return (
                     <AutoSourceLink
                       end={end}
