@@ -696,7 +696,7 @@ function cableBomEntries(route: CableRoute, devices: Device[]) {
         : undefined;
       const endLabel = routeEndpointLabel(endpoint, devicesById, `Split end ${index + 1}`);
       return {
-        label: `${startLabel} → ${endLabel}`,
+        label: `${startLabel} - ${endLabel}`,
         note: "Split route: includes shared trunk plus this branch.",
         pixels: routePixels(route.points) + routePixels(branchPathPoints(route, branch)),
       };
@@ -706,7 +706,7 @@ function cableBomEntries(route: CableRoute, devices: Device[]) {
     (endpoint) => endpoint.pointIndex === route.points.length - 1,
   );
   return [{
-    label: `${startLabel} → ${routeEndpointLabel(endEndpoint, devicesById, "Cable end")}`,
+    label: `${startLabel} - ${routeEndpointLabel(endEndpoint, devicesById, "Cable end")}`,
     note: undefined,
     pixels: routePixels(route.points),
   }];
@@ -3118,7 +3118,7 @@ function App() {
     };
     const addItem = (name: string, quantity: string, note?: string) => {
       addPageIfNeeded(note ? 12 : 7);
-      document.setFont("helvetica", "bold");
+      document.setFont("helvetica", "normal");
       document.setFontSize(10);
       document.text(name, margin, y);
       document.setFont("helvetica", "normal");
