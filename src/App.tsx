@@ -5180,9 +5180,11 @@ function App() {
               onChange={(event) => handleFile(event.target.files?.[0] ?? null)}
             />
           </label>
-          <p className={storageNotice ? "autosave-status warning" : "autosave-status"}>
-            {storageNotice || "Autosaves locally in this browser."}
-          </p>
+          {storageNotice && (
+            <p className="autosave-status warning">
+              {storageNotice}
+            </p>
+          )}
 
           <section className="tool-group" aria-label="Mode">
             <h2>Mode</h2>
