@@ -942,6 +942,17 @@ function autoSourceLinkId(consumerId: string, source: Pick<ConsumerSource, "type
   return `${consumerId}-${source.type}-${source.id}`;
 }
 
+function isManualProducerSourceAssignment(
+  assignment: ResolvedConsumerSource & { source?: ConsumerSource },
+) {
+  return (
+    !assignment.autoAssigned &&
+    assignment.source?.type === "producer" &&
+    assignment.consumer.sourceMode === "manual" &&
+    assignment.consumer.sourceType === "producer"
+  );
+}
+
 function sourceLabel(source?: ConsumerSource) {
   return source?.label ?? "Unassigned";
 }
@@ -4400,9 +4411,12 @@ function App() {
         (
           assignment,
         ): assignment is ResolvedConsumerSource & { source: ConsumerSource; targetPoint: Point } => {
-          if (!assignment.autoAssigned || !assignment.source || !assignment.targetPoint) {
+          if (!assignment.source || !assignment.targetPoint) {
             return false;
           }
+          const isVisibleSourceLink =
+            assignment.autoAssigned || isManualProducerSourceAssignment(assignment);
+          if (!isVisibleSourceLink) return false;
           const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
           const isFlowing = selectedAutoSourceFlowIds.has(linkId);
           return (
@@ -4437,11 +4451,13 @@ function App() {
   const routedAutoSourceLinks = useMemo(
     () =>
       routeAutoSourceLinks(
-        visibleAutoSourceAssignments.map((assignment) => ({
-          end: assignment.targetPoint,
-          id: autoSourceLinkId(assignment.consumer.id, assignment.source),
-          start: assignment.consumer.point,
-        })),
+        visibleAutoSourceAssignments
+          .filter((assignment) => !isManualProducerSourceAssignment(assignment))
+          .map((assignment) => ({
+            end: assignment.targetPoint,
+            id: autoSourceLinkId(assignment.consumer.id, assignment.source),
+            start: assignment.consumer.point,
+          })),
       ),
     [visibleAutoSourceAssignments],
   );
@@ -5484,15 +5500,22 @@ function App() {
                   const endPoint = assignment.targetPoint;
                   const upstreamPixels = powerPathPixelsToAssignmentSource(assignment);
                   const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
+                  const isStraightSourceLink = isManualProducerSourceAssignment(assignment);
                   const routedArc = routedAutoSourceLinks.get(linkId);
-                  const start = toDisplayPoint(routedArc?.start ?? startPoint);
-                  const end = toDisplayPoint(routedArc?.end ?? endPoint);
+                  const start = toDisplayPoint(
+                    isStraightSourceLink ? startPoint : routedArc?.start ?? startPoint,
+                  );
+                  const end = toDisplayPoint(
+                    isStraightSourceLink ? endPoint : routedArc?.end ?? endPoint,
+                  );
                   const control = toDisplayPoint(
                     routedArc?.control ?? sourceArcControl(startPoint, endPoint),
                   );
                   const arcPixels =
-                    routedArc?.arcPixels ??
-                    sourceArcPixels(startPoint, endPoint, sourceArcControl(startPoint, endPoint));
+                    isStraightSourceLink
+                      ? distance(startPoint, endPoint)
+                      : routedArc?.arcPixels ??
+                        sourceArcPixels(startPoint, endPoint, sourceArcControl(startPoint, endPoint));
                   const maxLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
                   const startRatio = maxLengthPx ? upstreamPixels / maxLengthPx : 0;
                   const endRatio = maxLengthPx ? (upstreamPixels + arcPixels) / maxLengthPx : 0;
@@ -5503,7 +5526,11 @@ function App() {
                       flowing={selectedAutoSourceFlowIds.has(linkId)}
                       id={linkId}
                       key={linkId}
-                      pathData={sourceArcPathThroughControl(start, control, end)}
+                      pathData={
+                        isStraightSourceLink
+                          ? `M ${start.x} ${start.y} L ${end.x} ${end.y}`
+                          : sourceArcPathThroughControl(start, control, end)
+                      }
                       start={start}
                       startRatio={startRatio}
                     />
