@@ -28,5 +28,13 @@ docker run -d \
   "$IMAGE"
 
 docker ps --filter "name=^/$CONTAINER$" --format "{{.Names}} {{.Status}} {{.Ports}}"
-docker exec "$CONTAINER" node -e "fetch('http://127.0.0.1:8080').then(r=>console.log(r.status, r.headers.get('content-type'))).catch(e=>{console.error(e); process.exit(1)})"
+for attempt in {1..20}; do
+  if docker exec "$CONTAINER" node -e "fetch('http://127.0.0.1:8080').then(r=>{console.log(r.status, r.headers.get('content-type')); process.exit(r.ok ? 0 : 1)}).catch(()=>process.exit(1))"; then
+    exit 0
+  fi
+  sleep 1
+done
+
+docker logs --tail 80 "$CONTAINER"
+exit 1
 REMOTE
