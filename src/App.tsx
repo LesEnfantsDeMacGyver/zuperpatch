@@ -219,7 +219,6 @@ const zoomStep = 0.2;
 const maxUndoHistory = 160;
 const flowDashCyclePx = 52;
 const defaultPowerSourceSockets = 4;
-const defaultPowerstripSockets = 4;
 const defaultEthernetSwitchSockets = 8;
 
 const cableTypes: Record<CableType, CableConfig> = {
@@ -797,9 +796,9 @@ function commonDeviceValue<T>(
 }
 
 function socketCapacityForDevice(device: Device) {
+  if (device.type === "powerstrip") return 0;
   if (device.socketCapacity !== undefined) return Math.max(0, device.socketCapacity);
   if (device.type === "producer") return defaultPowerSourceSockets;
-  if (device.type === "powerstrip") return defaultPowerstripSockets;
   if (device.type === "switch") return defaultEthernetSwitchSockets;
   return 0;
 }
@@ -1877,7 +1876,6 @@ function App() {
     selectedDevices.every(
       (device) =>
         device.type === "producer" ||
-        device.type === "powerstrip" ||
         device.type === "switch",
     );
   const selectedCommonLabelPosition = commonDeviceValue(
@@ -2116,9 +2114,8 @@ function App() {
           const feedCableCount = electricalCableCount > 0 ? 1 : 0;
           const outletCableCount = Math.max(0, electricalCableCount - feedCableCount);
           const occupiedSocketCount = outletCableCount + consumerCount;
-          const socketCapacity = socketCapacityForDevice(powerstrip);
-          const freeSocketCount = Math.max(0, socketCapacity - occupiedSocketCount);
-          const overSocketCount = Math.max(0, occupiedSocketCount - socketCapacity);
+          const socketCapacity = occupiedSocketCount + desiredFreeSockets;
+          const freeSocketCount = desiredFreeSockets;
           return {
             powerstripId: powerstrip.id,
             electricalCableCount,
@@ -2128,8 +2125,6 @@ function App() {
             desiredFreeSockets,
             freeSocketCount,
             occupiedSocketCount,
-            overSocketCount,
-            requiredSocketCount: occupiedSocketCount + desiredFreeSockets,
             socketCapacity,
           };
         }),
@@ -2141,8 +2136,6 @@ function App() {
           (powerstrip) => powerstrip.powerstripId === selectedDevice.id,
         )
       : undefined;
-  const selectedPowerstripSocketCapacity =
-    selectedDevice?.type === "powerstrip" ? socketCapacityForDevice(selectedDevice) : 0;
   const attachedPowerPathPixelsToDeviceForColor = (
     device: Device,
     excludedRouteId?: string,
@@ -3293,9 +3286,9 @@ function App() {
       addItem(
         `Powerstrip ${index + 1}`,
         `${strip.socketCapacity} socket${strip.socketCapacity === 1 ? "" : "s"}`,
-        `${strip.occupiedSocketCount} occupied, ${strip.freeSocketCount} free${
-          strip.overSocketCount > 0 ? `, ${strip.overSocketCount} over capacity` : ""
-        }; ${strip.desiredFreeSockets} desired free; ${strip.feedCableCount} supply feed${
+        `${strip.occupiedSocketCount} occupied; ${strip.desiredFreeSockets} desired free; ${
+          strip.feedCableCount
+        } supply feed${
           strip.feedCableCount === 1 ? "" : "s"
         }`,
       );
@@ -3480,7 +3473,6 @@ function App() {
         ...(activeDevice === "powerstrip"
           ? {
               desiredFreeSockets: 0,
-              socketCapacity: defaultPowerstripSockets,
             }
           : {}),
         ...(activeDevice === "producer"
@@ -4383,8 +4375,6 @@ function App() {
                     ? "Ethernet sockets"
                     : selectedCommonDeviceType === "producer"
                       ? "Power sockets"
-                      : selectedCommonDeviceType === "powerstrip"
-                        ? "Powerstrip sockets"
                       : "Sockets / ports"}
                 </span>
                 <div className="input-row">
@@ -4428,27 +4418,6 @@ function App() {
           <section className="tool-group editor-panel" aria-label="Selected powerstrip">
             <h2>Powerstrip</h2>
             <label className="field">
-              <span>Powerstrip sockets</span>
-              <div className="input-row">
-                <input
-                  inputMode="numeric"
-                  min="0"
-                  step="1"
-                  type="number"
-                  value={selectedPowerstripSocketCapacity}
-                  onChange={(event) =>
-                    updateDevice(selectedDevice.id, {
-                      socketCapacity: Math.max(
-                        0,
-                        Math.floor(Number(event.target.value) || 0),
-                      ),
-                    })
-                  }
-                />
-                <span>outlets</span>
-              </div>
-            </label>
-            <label className="field">
               <span>Desired free sockets</span>
               <div className="input-row">
                 <input
@@ -4475,11 +4444,7 @@ function App() {
               {(selectedPowerstripStats?.socketCapacity ?? 0) === 1 ? "" : "s"}
               {" "}
               ({selectedPowerstripStats?.occupiedSocketCount ?? 0} occupied,{" "}
-              {selectedPowerstripStats?.freeSocketCount ?? 0} free
-              {(selectedPowerstripStats?.overSocketCount ?? 0) > 0
-                ? `, ${selectedPowerstripStats?.overSocketCount ?? 0} over`
-                : ""}
-              , {selectedPowerstripStats?.desiredFreeSockets ?? 0} desired free
+              {selectedPowerstripStats?.desiredFreeSockets ?? 0} desired free
               {(selectedPowerstripStats?.feedCableCount ?? 0) > 0
                 ? `, ${selectedPowerstripStats?.feedCableCount ?? 0} feed`
                 : ""}
@@ -5165,13 +5130,9 @@ function App() {
                               (powerstrip) => powerstrip.powerstripId === device.id,
                             );
                             const socketCapacity = stats?.socketCapacity ?? 0;
-                            const overText =
-                              (stats?.overSocketCount ?? 0) > 0
-                                ? `, ${stats?.overSocketCount ?? 0} over`
-                                : "";
                             return `${socketCapacity} sockets (${
                               stats?.freeSocketCount ?? 0
-                            } free${overText})`;
+                            } free)`;
                           })()
                       : "";
                 const labelPosition = device.labelPosition ?? "bottom";
