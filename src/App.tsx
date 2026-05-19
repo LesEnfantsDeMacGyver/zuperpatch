@@ -159,6 +159,12 @@ type FlowPathSegment = {
   start: Point;
 };
 
+type CableColorPath = {
+  offsetPx: number;
+  sourceBranchId?: string;
+  sourcePointIndex?: number;
+};
+
 type CableConfig = {
   id: CableType;
   label: string;
@@ -418,13 +424,19 @@ function flowColorsAtRatio(ratio: number) {
   return flowColorsForCable(colorAtRatio(ratio));
 }
 
-function flowSegmentsForPoints(points: Point[], maxLengthPx: number): FlowPathSegment[] {
+function flowSegmentsForPoints(
+  points: Point[],
+  maxLengthPx: number,
+  offsetPx = 0,
+): FlowPathSegment[] {
   let travelled = 0;
   return points.slice(1).map((point, index) => {
     const start = points[index];
     const segmentLength = distance(start, point);
-    const startRatio = maxLengthPx ? travelled / maxLengthPx : 0;
-    const endRatio = maxLengthPx ? (travelled + segmentLength) / maxLengthPx : startRatio;
+    const startRatio = maxLengthPx ? (offsetPx + travelled) / maxLengthPx : 0;
+    const endRatio = maxLengthPx
+      ? (offsetPx + travelled + segmentLength) / maxLengthPx
+      : startRatio;
     const startColors = flowColorsAtRatio(startRatio);
     const endColors = flowColorsAtRatio(endRatio);
     const segment: FlowPathSegment = {
@@ -647,6 +659,10 @@ function routeCablePathPixels(route: CableRoute) {
 
 function routeMaterialPixels(route: CableRoute) {
   return routeCablePathPixels(route).reduce((sum, pixels) => sum + pixels, 0);
+}
+
+function cumulativePixelsAtPoint(points: Point[], pointIndex: number) {
+  return routePixels(points.slice(0, pointIndex + 1));
 }
 
 function deviceDisplayLabel(device: Device | undefined) {
@@ -2113,6 +2129,27 @@ function App() {
       : undefined;
   const selectedPowerstripSocketCapacity =
     selectedDevice?.type === "powerstrip" ? socketCapacityForDevice(selectedDevice) : 0;
+  const cableColorPathForRoute = (route: CableRoute): CableColorPath | undefined => {
+    if (route.type !== "power") return undefined;
+    const sourceEndpoint = routeEndpointReferences(route)
+      .map((endpoint) => ({
+        endpoint,
+        upstreamPixels: upstreamPowerPathPixelsToEndpoint(endpoint, devicesById, cables),
+      }))
+      .filter(
+        (candidate): candidate is {
+          endpoint: RouteEndpointReference;
+          upstreamPixels: number;
+        } => candidate.upstreamPixels !== undefined,
+      )
+      .sort((a, b) => a.upstreamPixels - b.upstreamPixels)[0];
+    if (!sourceEndpoint) return undefined;
+    return {
+      offsetPx: sourceEndpoint.upstreamPixels * viewScale,
+      sourceBranchId: sourceEndpoint.endpoint.branchId,
+      sourcePointIndex: sourceEndpoint.endpoint.pointIndex,
+    };
+  };
   const powerPathPixelsToAssignmentSource = (assignment: ResolvedConsumerSource) => {
     const source = assignment.source;
     if (!source) return 0;
@@ -2130,15 +2167,15 @@ function App() {
   const selectedFlowPaths = useMemo<FlowPath[]>(() => {
     if (!selectedDevice) return [];
     const paths: FlowPath[] = [];
-    const addPath = (id: string, points: Point[], cableType: CableType) => {
+    const addPath = (id: string, points: Point[], cableType: CableType, offsetPx = 0) => {
       const cleanPoints = dedupeAdjacentPoints(points);
       if (cleanPoints.length > 1 && routePixels(cleanPoints) > 4) {
         const maxLengthPx = pixelsPerMeter * cableTypes[cableType].maxLengthM;
         paths.push({
           id,
           pathData: routePathData(cleanPoints),
-          segments: flowSegmentsForPoints(cleanPoints, maxLengthPx),
-          ...flowColorsAtRatio(0),
+          segments: flowSegmentsForPoints(cleanPoints, maxLengthPx, offsetPx),
+          ...flowColorsAtRatio(maxLengthPx ? offsetPx / maxLengthPx : 0),
         });
       }
     };
@@ -2220,6 +2257,8 @@ function App() {
           return a.attachment.distancePx - b.attachment.distancePx;
         })[0];
       if (!feed || samePoint(feed.sourceEndpoint.point, feed.targetEndpoint.point)) return;
+      const sourceOffsetPx =
+        upstreamPowerPathPixelsToEndpoint(feed.sourceEndpoint, devicesById, cables) ?? 0;
       addPath(
         `${idPrefix}-${feed.attachment.route.id}`,
         routePathBetweenEndpoints(
@@ -2228,6 +2267,7 @@ function App() {
           feed.targetEndpoint,
         ),
         "power",
+        sourceOffsetPx,
       );
       if (
         feed.sourceEndpoint.deviceId &&
@@ -2302,10 +2342,13 @@ function App() {
             const arcStartPixels =
               upstreamPowerPathPixelsToRouteEndpoint(source.route, targetEndpoint, devicesById, cables) ?? 0;
             const maxPowerLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
+            const sourceOffsetPx =
+              upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
             addPath(
               `power-cable-feed-${source.route.id}`,
               routePathBetweenEndpoints(source.route, sourceEndpoint, targetEndpoint),
               "power",
+              sourceOffsetPx,
             );
             addPathData(
               `power-cable-arc-existing-${source.route.id}-${selectedDevice.id}`,
@@ -4732,6 +4775,7 @@ function App() {
                         }
                   }
                   branches={scaleBranches(route.branches, viewScale)}
+                  colorPath={cableColorPathForRoute(route)}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
                   points={toDisplayPoints(route.points)}
                   selectedPointIndex={
@@ -5207,6 +5251,7 @@ function AutoSourceLink({
 function CableRouteView({
   active = false,
   branches = [],
+  colorPath,
   config,
   dimmed = false,
   displayPixelsPerMeter,
@@ -5220,6 +5265,7 @@ function CableRouteView({
 }: {
   active?: boolean;
   branches?: CableBranch[];
+  colorPath?: CableColorPath;
   config: CableConfig;
   dimmed?: boolean;
   displayPixelsPerMeter: number;
@@ -5237,6 +5283,13 @@ function CableRouteView({
   const maxLengthPx = displayPixelsPerMeter * config.maxLengthM;
   const ratioForPixels = (pixels: number) => (maxLengthPx ? pixels / maxLengthPx : 0);
   const trunkPixels = routePixels(points);
+  const sourcePointIndex = colorPath?.sourcePointIndex ?? 0;
+  const sourceTrunkPixels =
+    sourcePointIndex !== undefined && sourcePointIndex >= 0 && sourcePointIndex < points.length
+      ? cumulativePixelsAtPoint(points, sourcePointIndex)
+      : 0;
+  const colorDistanceForTrunkPixels = (pixels: number) =>
+    (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceTrunkPixels);
   return (
     <g
       className={[
@@ -5256,9 +5309,9 @@ function CableRouteView({
       {points.slice(1).map((point, index) => {
         const start = points[index];
         const segmentLength = distance(start, point);
-        const startRatio = ratioForPixels(travelled);
+        const startRatio = ratioForPixels(colorDistanceForTrunkPixels(travelled));
         travelled += segmentLength;
-        const endRatio = ratioForPixels(travelled);
+        const endRatio = ratioForPixels(colorDistanceForTrunkPixels(travelled));
         const gradientId = `${config.id}-${start.x}-${start.y}-${point.x}-${point.y}-${draft ? "draft" : "route"}`;
         return (
           <g key={`${point.x}-${point.y}-${index}`}>
@@ -5295,6 +5348,12 @@ function CableRouteView({
             const branchTravelled = routePixels(branchPath.slice(0, index + 1));
             const segmentLength = distance(start, point);
             const gradientId = `${config.id}-${branch.id}-${start.x}-${start.y}-${point.x}-${point.y}`;
+            const sourceBranchPixels =
+              colorPath?.sourceBranchId === branch.id ? routePixels(branchPath) : undefined;
+            const branchColorDistance = (pixels: number) =>
+              sourceBranchPixels !== undefined
+                ? (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceBranchPixels)
+                : colorDistanceForTrunkPixels(trunkPixels) + pixels;
             return (
               <g key={`${branch.id}-${point.x}-${point.y}-${index}`}>
                 <defs>
@@ -5306,8 +5365,8 @@ function CableRouteView({
                     y1={start.y}
                     y2={point.y}
                   >
-                    <stop offset="0%" stopColor={colorAtRatio(ratioForPixels(trunkPixels + branchTravelled))} />
-                    <stop offset="100%" stopColor={colorAtRatio(ratioForPixels(trunkPixels + branchTravelled + segmentLength))} />
+                    <stop offset="0%" stopColor={colorAtRatio(ratioForPixels(branchColorDistance(branchTravelled)))} />
+                    <stop offset="100%" stopColor={colorAtRatio(ratioForPixels(branchColorDistance(branchTravelled + segmentLength)))} />
                   </linearGradient>
                 </defs>
                 <line
