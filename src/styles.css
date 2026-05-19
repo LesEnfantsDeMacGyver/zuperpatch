@@ -148,6 +148,16 @@ button svg {
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.app-shell input,
+.app-shell select,
+.app-shell textarea,
+.app-shell [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .side-panel {
