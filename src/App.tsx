@@ -13,7 +13,6 @@ import {
   PlugZap,
   Plus,
   Ruler,
-  Split,
   Trash2,
   Undo2,
   Upload,
@@ -33,12 +32,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 type Point = { x: number; y: number };
-type CableType = "ethernet" | "hdmi" | "power" | "xlr";
+type CableType = "ethernet" | "power" | "xlr";
 type DeviceType =
   | "powerstrip"
   | "switch"
   | "ethernetClient"
-  | "splitter"
   | "producer"
   | "consumer";
 type LabelPosition = "top" | "right" | "bottom" | "left";
@@ -226,15 +224,6 @@ const cableTypes: Record<CableType, CableConfig> = {
     accent: "#0f766e",
     note: "Typical copper Ethernet channel limit.",
   },
-  hdmi: {
-    id: "hdmi",
-    label: "HDMI",
-    maxLengthM: 15,
-    colorStart: "#38bdf8",
-    colorEnd: "#f97316",
-    accent: "#0369a1",
-    note: "Planning target for passive runs; active/fiber can differ.",
-  },
   power: {
     id: "power",
     label: "Electrical",
@@ -278,13 +267,6 @@ const deviceTypes: Record<DeviceType, DeviceConfig> = {
     icon: EthernetPort,
     color: "#0891b2",
     detail: "PoE load",
-  },
-  splitter: {
-    id: "splitter",
-    label: "HDMI splitter/merger",
-    icon: Split,
-    color: "#2563eb",
-    detail: "Click to place",
   },
   producer: {
     id: "producer",
@@ -749,9 +731,6 @@ function canCableConnectDevice(cableType: CableType, deviceType: DeviceType) {
   if (cableType === "ethernet") {
     return deviceType === "switch" || deviceType === "ethernetClient" || deviceType === "consumer";
   }
-  if (cableType === "hdmi") {
-    return deviceType === "splitter";
-  }
   if (cableType === "xlr") {
     return deviceType === "consumer";
   }
@@ -781,9 +760,6 @@ function canCableConnectDeviceTypes(
       deviceTypes === "ethernetClient:switch" ||
       deviceTypes === "switch:switch"
     );
-  }
-  if (cableType === "hdmi") {
-    return firstType === "splitter" && secondType === "splitter";
   }
   if (cableType === "xlr") {
     return deviceTypes === "consumer:consumer";
@@ -2025,15 +2001,6 @@ function App() {
           "consumer",
         );
       });
-    } else if (selectedDevice.type === "splitter") {
-      resolveDeviceCableAttachments(selectedDevice, cables, "hdmi").forEach((attachment) => {
-        addRouteFromDevice(
-          attachment.route,
-          selectedDevice.id,
-          `hdmi-splitter-${attachment.route.id}`,
-          "splitter",
-        );
-      });
     }
 
     return paths;
@@ -2223,9 +2190,6 @@ function App() {
         connected = (ethernetSwitchCableCounts.get(device.id) ?? 0) > 0;
       } else if (device.type === "ethernetClient") {
         connected = ethernetClientCableIds.has(device.id);
-      } else if (device.type === "splitter") {
-        connected =
-          resolveDeviceCableAttachments(device, cables, "hdmi").length > 0;
       }
 
       if (!connected) orphanIds.add(device.id);

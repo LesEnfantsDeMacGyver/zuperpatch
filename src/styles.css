@@ -636,20 +636,14 @@ h2 {
 
 .app-shell:has(.cable-type-option.cable-type-ethernet:hover)
   .cable-route:not(.cable-type-ethernet),
-.app-shell:has(.cable-type-option.cable-type-hdmi:hover)
-  .cable-route:not(.cable-type-hdmi),
 .app-shell:has(.cable-type-option.cable-type-power:hover)
   .cable-route:not(.cable-type-power),
 .app-shell:has(.cable-type-option.cable-type-xlr:hover)
   .cable-route:not(.cable-type-xlr),
 .app-shell:has(.cable-type-option.cable-type-ethernet:hover)
   .auto-source-link,
-.app-shell:has(.cable-type-option.cable-type-hdmi:hover)
-  .auto-source-link,
 .app-shell:has(.cable-type-option.cable-type-xlr:hover)
   .auto-source-link,
-.app-shell:has(.cable-type-option.cable-type-hdmi:hover)
-  .ethernet-attachment,
 .app-shell:has(.cable-type-option.cable-type-power:hover)
   .ethernet-attachment,
 .app-shell:has(.cable-type-option.cable-type-xlr:hover)
