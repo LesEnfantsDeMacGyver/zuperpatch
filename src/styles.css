@@ -647,6 +647,40 @@ h2 {
   stroke-width: 1;
 }
 
+.selection-marquee {
+  fill: rgb(59 130 246 / 0.12);
+  pointer-events: none;
+  stroke: #2563eb;
+  stroke-dasharray: 6 4;
+  stroke-width: 1.5;
+}
+
+.selection-box rect {
+  fill: none;
+  pointer-events: none;
+  stroke: #2563eb;
+  stroke-dasharray: 7 5;
+  stroke-width: 1.5;
+}
+
+.selection-box line {
+  pointer-events: none;
+  stroke: #2563eb;
+  stroke-width: 1.5;
+}
+
+.selection-rotate-knob {
+  cursor: grab;
+  fill: var(--color-panel);
+  pointer-events: all;
+  stroke: #2563eb;
+  stroke-width: 2;
+}
+
+.selection-rotate-knob:active {
+  cursor: grabbing;
+}
+
 .calibration-layer line {
   stroke: var(--color-brand);
   stroke-dasharray: 7 5;

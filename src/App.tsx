@@ -148,6 +148,24 @@ type Measurement = {
   start: Point;
   end: Point;
 };
+type SelectionRect = {
+  start: Point;
+  end: Point;
+  toggle: boolean;
+};
+type SelectionBounds = {
+  maxX: number;
+  maxY: number;
+  minX: number;
+  minY: number;
+};
+type RotatingSelection = {
+  center: Point;
+  initialAngle: number;
+  initialCables: CableRoute[];
+  initialDevices: Device[];
+  pointerId: number;
+};
 type RouteEndpointReference = ReturnType<typeof routeEndpointReferences>[number];
 
 type FlowPath = {
@@ -346,6 +364,85 @@ function clampPoint(point: Point, bounds: { width: number; height: number }) {
   return {
     x: Math.min(Math.max(point.x, 0), bounds.width),
     y: Math.min(Math.max(point.y, 0), bounds.height),
+  };
+}
+
+function normalizeBounds(start: Point, end: Point): SelectionBounds {
+  return {
+    maxX: Math.max(start.x, end.x),
+    maxY: Math.max(start.y, end.y),
+    minX: Math.min(start.x, end.x),
+    minY: Math.min(start.y, end.y),
+  };
+}
+
+function boundsFromPoints(points: Point[], padding = 0): SelectionBounds | undefined {
+  if (points.length === 0) return undefined;
+  return {
+    maxX: Math.max(...points.map((point) => point.x)) + padding,
+    maxY: Math.max(...points.map((point) => point.y)) + padding,
+    minX: Math.min(...points.map((point) => point.x)) - padding,
+    minY: Math.min(...points.map((point) => point.y)) - padding,
+  };
+}
+
+function mergeBounds(bounds: Array<SelectionBounds | undefined>) {
+  const cleanBounds = bounds.filter((bound): bound is SelectionBounds => Boolean(bound));
+  if (cleanBounds.length === 0) return undefined;
+  return {
+    maxX: Math.max(...cleanBounds.map((bound) => bound.maxX)),
+    maxY: Math.max(...cleanBounds.map((bound) => bound.maxY)),
+    minX: Math.min(...cleanBounds.map((bound) => bound.minX)),
+    minY: Math.min(...cleanBounds.map((bound) => bound.minY)),
+  };
+}
+
+function boundsIntersect(first: SelectionBounds, second: SelectionBounds) {
+  return (
+    first.minX <= second.maxX &&
+    first.maxX >= second.minX &&
+    first.minY <= second.maxY &&
+    first.maxY >= second.minY
+  );
+}
+
+function selectionCenter(bounds: SelectionBounds): Point {
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+  };
+}
+
+function routePoints(route: CableRoute) {
+  return [
+    ...route.points,
+    ...(route.branches?.flatMap((branch) => branch.points) ?? []),
+  ];
+}
+
+function routeBounds(route: CableRoute) {
+  return boundsFromPoints(routePoints(route), 7);
+}
+
+function rotatePointAround(point: Point, center: Point, angleRadians: number): Point {
+  const cos = Math.cos(angleRadians);
+  const sin = Math.sin(angleRadians);
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  return {
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos,
+  };
+}
+
+function rotateRoute(route: CableRoute, center: Point, angleRadians: number): CableRoute {
+  return {
+    ...route,
+    points: route.points.map((point) => rotatePointAround(point, center, angleRadians)),
+    branches: route.branches?.map((branch) => ({
+      ...branch,
+      points: branch.points.map((point) => rotatePointAround(point, center, angleRadians)),
+    })),
   };
 }
 
@@ -1840,9 +1937,12 @@ function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [draggingDevice, setDraggingDevice] = useState<DraggingDevice | null>(null);
   const [draggingCablePoint, setDraggingCablePoint] = useState<DraggingCablePoint | null>(null);
+  const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
+  const [rotatingSelection, setRotatingSelection] = useState<RotatingSelection | null>(null);
   const [selectedCablePoint, setSelectedCablePoint] = useState<SelectedCablePoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
+  const [selectedCableIds, setSelectedCableIds] = useState<string[]>([]);
   const [copiedDevice, setCopiedDevice] = useState<Device | null>(null);
   const [poppedDeviceId, setPoppedDeviceId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -2169,6 +2269,7 @@ function App() {
       if (
         (event.key === "Backspace" || event.key === "Delete") &&
         (selectedDeviceIds.length > 0 ||
+          selectedCableIds.length > 0 ||
           devices.some((device) => device.id === selectedId) ||
           cables.some((route) => route.id === selectedId))
       ) {
@@ -2251,6 +2352,14 @@ function App() {
   const selectedDevices = selectedDeviceIds
     .map((deviceId) => devices.find((device) => device.id === deviceId))
     .filter((device): device is Device => Boolean(device));
+  const selectedCables = selectedCableIds
+    .map((routeId) => cables.find((route) => route.id === routeId))
+    .filter((route): route is CableRoute => Boolean(route));
+  const selectedObjectCount = selectedDevices.length + selectedCables.length;
+  const selectedObjectBounds = mergeBounds([
+    ...selectedDevices.map((device) => boundsFromPoints([device.point], 30)),
+    ...selectedCables.map(routeBounds),
+  ]);
   const selectedDevice = selectedDevices.length === 1 ? selectedDevices[0] : undefined;
   const selectedDeviceCount = selectedDevices.length;
   const selectedCommonDeviceType =
@@ -3850,6 +3959,7 @@ function App() {
     setCursorPoint(null);
     setSelectedId(null);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([]);
     setStorageNotice("");
     queueViewPositionRestore(defaultViewPosition);
   }
@@ -3881,6 +3991,7 @@ function App() {
     setScaleDraft(null);
     setSelectedId(null);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([]);
     queueViewPositionRestore(project.viewPosition);
 
     if (project.pdfDataUrl) {
@@ -3994,6 +4105,11 @@ function App() {
     setSelectedId(snapshot.selectedId);
     setSelectedDeviceIds(
       snapshot.selectedId && project.devices.some((device) => device.id === snapshot.selectedId)
+        ? [snapshot.selectedId]
+        : [],
+    );
+    setSelectedCableIds(
+      snapshot.selectedId && project.cables.some((route) => route.id === snapshot.selectedId)
         ? [snapshot.selectedId]
         : [],
     );
@@ -4445,8 +4561,18 @@ function App() {
 
   function handlePointerDown(event: PointerEvent) {
     const point = pointerFromEvent(event);
+    if (mode === "select") {
+      setSelectedCablePoint(null);
+      setSelectionRect({ start: point, end: point, toggle: event.metaKey || event.ctrlKey });
+      event.currentTarget.setPointerCapture(event.pointerId);
+      if (!event.metaKey && !event.ctrlKey) {
+        selectObjects([], []);
+      }
+      return;
+    }
     setSelectedId(null);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([]);
     setSelectedCablePoint(null);
 
     if (mode === "scale") {
@@ -4523,6 +4649,39 @@ function App() {
 
   function handlePointerMove(event: PointerEvent) {
     const point = pointerFromEvent(event);
+    if (rotatingSelection) {
+      if (rotatingSelection.pointerId !== event.pointerId) return;
+      const angle = Math.atan2(point.y - rotatingSelection.center.y, point.x - rotatingSelection.center.x);
+      const snappedDelta = Math.round((angle - rotatingSelection.initialAngle) / (Math.PI / 4)) * (Math.PI / 4);
+      setDevices((current) =>
+        current.map((device) => {
+          const initialDevice = rotatingSelection.initialDevices.find(
+            (candidate) => candidate.id === device.id,
+          );
+          return initialDevice
+            ? {
+                ...device,
+                point: rotatePointAround(initialDevice.point, rotatingSelection.center, snappedDelta),
+              }
+            : device;
+        }),
+      );
+      setCables((current) =>
+        current.map((route) => {
+          const initialRoute = rotatingSelection.initialCables.find(
+            (candidate) => candidate.id === route.id,
+          );
+          return initialRoute
+            ? rotateRoute(initialRoute, rotatingSelection.center, snappedDelta)
+            : route;
+        }),
+      );
+      return;
+    }
+    if (selectionRect) {
+      setSelectionRect({ ...selectionRect, end: point });
+      return;
+    }
     if (draggingCablePoint) {
       const shouldConstrain = event.shiftKey || isShiftPressed;
       const excludedDeviceIdsForRoute = (route: CableRoute) => {
@@ -4706,6 +4865,47 @@ function App() {
   }
 
   function handlePointerUp(event: PointerEvent) {
+    if (selectionRect) {
+      const bounds = normalizeBounds(selectionRect.start, pointerFromEvent(event));
+      const didDrag = distance(selectionRect.start, pointerFromEvent(event)) > 4;
+      if (didDrag) {
+        const selectedFromRectDevices = currentDevices
+          .filter((device) => boundsIntersect(bounds, boundsFromPoints([device.point], 12) as SelectionBounds))
+          .map((device) => device.id);
+        const selectedFromRectCables = currentCables
+          .filter((route) => {
+            const boundsForRoute = routeBounds(route);
+            return boundsForRoute ? boundsIntersect(bounds, boundsForRoute) : false;
+          })
+          .map((route) => route.id);
+        if (selectionRect.toggle) {
+          const deviceSet = new Set(selectedDeviceIds);
+          selectedFromRectDevices.forEach((deviceId) => {
+            if (deviceSet.has(deviceId)) deviceSet.delete(deviceId);
+            else deviceSet.add(deviceId);
+          });
+          const cableSet = new Set(selectedCableIds);
+          selectedFromRectCables.forEach((routeId) => {
+            if (cableSet.has(routeId)) cableSet.delete(routeId);
+            else cableSet.add(routeId);
+          });
+          selectObjects([...deviceSet], [...cableSet]);
+        } else {
+          selectObjects(selectedFromRectDevices, selectedFromRectCables);
+        }
+      }
+      setSelectionRect(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
+    if (rotatingSelection && rotatingSelection.pointerId === event.pointerId) {
+      setRotatingSelection(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    }
     finishUndoGroup();
     if (measurementDraft) {
       const finalMeasurement = { ...measurementDraft, end: pointerFromEvent(event) };
@@ -4763,10 +4963,11 @@ function App() {
 
   function deleteSelected() {
     const selectedDeviceIdSet = new Set(selectedDeviceIds);
-    if (!selectedId && selectedDeviceIdSet.size === 0) return;
+    const selectedCableIdSet = new Set(selectedCableIds);
+    if (!selectedId && selectedDeviceIdSet.size === 0 && selectedCableIdSet.size === 0) return;
     setCables((current) =>
-      selectedDeviceIdSet.size > 0
-        ? current
+      selectedCableIdSet.size > 0
+        ? current.filter((route) => !selectedCableIdSet.has(route.id))
         : current.filter((route) => route.id !== selectedId),
     );
     setDevices((current) =>
@@ -4791,6 +4992,7 @@ function App() {
     );
     setSelectedId(null);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([]);
     setSelectedCablePoint(null);
   }
 
@@ -4843,7 +5045,22 @@ function App() {
 
   function selectDevices(deviceIds: string[]) {
     setSelectedDeviceIds(deviceIds);
+    setSelectedCableIds([]);
     setSelectedId(deviceIds[0] ?? null);
+    setSelectedCablePoint(null);
+  }
+
+  function selectCables(routeIds: string[]) {
+    setSelectedCableIds(routeIds);
+    setSelectedDeviceIds([]);
+    setSelectedId(routeIds[0] ?? null);
+    setSelectedCablePoint(null);
+  }
+
+  function selectObjects(deviceIds: string[], cableIds: string[]) {
+    setSelectedDeviceIds(deviceIds);
+    setSelectedCableIds(cableIds);
+    setSelectedId(deviceIds[0] ?? cableIds[0] ?? null);
     setSelectedCablePoint(null);
   }
 
@@ -4858,10 +5075,54 @@ function App() {
       const nextSelection = currentDeviceIds.includes(deviceId)
         ? currentDeviceIds.filter((currentId) => currentId !== deviceId)
         : [...currentDeviceIds, deviceId];
-      setSelectedId(nextSelection[0] ?? null);
+      setSelectedId(nextSelection[0] ?? selectedCableIds[0] ?? null);
       setSelectedCablePoint(null);
       return nextSelection;
     });
+  }
+
+  function toggleCableSelection(routeId: string) {
+    setSelectedCableIds((currentSelection) => {
+      const currentCableIds =
+        currentSelection.length > 0
+          ? currentSelection
+          : selectedId && cables.some((route) => route.id === selectedId)
+            ? [selectedId]
+            : [];
+      const nextSelection = currentCableIds.includes(routeId)
+        ? currentCableIds.filter((currentId) => currentId !== routeId)
+        : [...currentCableIds, routeId];
+      setSelectedId(selectedDeviceIds[0] ?? nextSelection[0] ?? null);
+      setSelectedCablePoint(null);
+      return nextSelection;
+    });
+  }
+
+  function beginSelectionRotation(event: PointerEvent<SVGCircleElement>) {
+    if (!selectedObjectBounds || selectedObjectCount === 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    beginUndoGroup();
+    const center = selectionCenter(selectedObjectBounds);
+    const point = pointerFromEvent(event);
+    setRotatingSelection({
+      center,
+      initialAngle: Math.atan2(point.y - center.y, point.x - center.x),
+      initialCables: selectedCables.map((route) => ({
+        ...route,
+        points: route.points.map(clonePoint),
+        branches: route.branches?.map((branch) => ({
+          ...branch,
+          points: branch.points.map(clonePoint),
+        })),
+      })),
+      initialDevices: selectedDevices.map((device) => ({
+        ...device,
+        point: clonePoint(device.point),
+      })),
+      pointerId: event.pointerId,
+    });
+    event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function updateDevice(id: string, updates: Partial<Device>) {
@@ -4997,6 +5258,7 @@ function App() {
     );
     setSelectedId(routeId);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([routeId]);
     setSelectedCablePoint({ routeId, pointIndex: insertion.pointIndex });
     setDraggingCablePoint({ routeId, pointIndex: insertion.pointIndex });
     setMode("select");
@@ -5050,6 +5312,7 @@ function App() {
     );
     setSelectedId(routeId);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([routeId]);
     setSelectedCablePoint(null);
     setMode("select");
   }
@@ -5060,7 +5323,12 @@ function App() {
     ...measurements,
     ...(measurementDraft ? [measurementDraft] : []),
   ].filter((measurement) => measurement.page === pageNumber);
-  const selectedCableRoute = currentCables.find((route) => route.id === selectedId);
+  const selectedCableRoute =
+    selectedDeviceIds.length === 0 && selectedCableIds.length === 1
+      ? currentCables.find((route) => route.id === selectedCableIds[0])
+      : selectedDeviceIds.length === 0 && selectedCableIds.length === 0
+        ? currentCables.find((route) => route.id === selectedId)
+        : undefined;
   const selectedMultiConsumerSourceValue =
     selectedCommonDeviceType !== "consumer"
       ? "mixed"
@@ -5127,6 +5395,7 @@ function App() {
     beginUndoGroup();
     setSelectedId(routeId);
     setSelectedDeviceIds([]);
+    setSelectedCableIds([routeId]);
     setMode("select");
     const branchId = event.currentTarget.dataset.branchId;
     let dragPoint: DraggingCablePoint;
@@ -6023,7 +6292,7 @@ function App() {
             </button>
             <button
               type="button"
-              disabled={!selectedId && selectedDeviceIds.length === 0}
+              disabled={!selectedId && selectedDeviceIds.length === 0 && selectedCableIds.length === 0}
               onClick={deleteSelected}
             >
               <Trash2 aria-hidden="true" />
@@ -6083,6 +6352,22 @@ function App() {
               </defs>
 
               <GridPattern width={pageSize.width} height={pageSize.height} visible={!pdfDoc} />
+
+              {mode === "select" && selectionRect && (
+                <rect
+                  className="selection-marquee"
+                  x={normalizeBounds(toDisplayPoint(selectionRect.start), toDisplayPoint(selectionRect.end)).minX}
+                  y={normalizeBounds(toDisplayPoint(selectionRect.start), toDisplayPoint(selectionRect.end)).minY}
+                  width={
+                    normalizeBounds(toDisplayPoint(selectionRect.start), toDisplayPoint(selectionRect.end)).maxX -
+                    normalizeBounds(toDisplayPoint(selectionRect.start), toDisplayPoint(selectionRect.end)).minX
+                  }
+                  height={
+                    normalizeBounds(toDisplayPoint(selectionRect.start), toDisplayPoint(selectionRect.end)).maxY -
+                    normalizeBounds(toDisplayPoint(selectionRect.start), toDisplayPoint(selectionRect.end)).minY
+                  }
+                />
+              )}
 
               {mode === "scale" && calibration && (
                 <g className="calibration-layer">
@@ -6151,9 +6436,11 @@ function App() {
 
               {visiblePlanCables.map((route) => (
                 <CableRouteView
-                  active={selectedId === route.id}
+                  active={selectedCableIds.includes(route.id) || selectedId === route.id}
                   config={cableTypes[route.type]}
-                  dimmed={Boolean(selectedCableRoute && selectedCableRoute.id !== route.id)}
+                  dimmed={Boolean(
+                    selectedCableIds.length > 0 && !selectedCableIds.includes(route.id),
+                  )}
                   key={route.id}
                   labelPathId={`cable-label-${route.id}`}
                   meters={pixelsPerMeter ? routeMaterialPixels(route) / pixelsPerMeter : 0}
@@ -6164,8 +6451,12 @@ function App() {
                       return;
                     }
                     event.stopPropagation();
-                    setSelectedId(route.id);
-                    setSelectedDeviceIds([]);
+                    if (event.metaKey || event.ctrlKey) {
+                      toggleCableSelection(route.id);
+                      setMode("select");
+                      return;
+                    }
+                    selectCables([route.id]);
                     setSelectedCablePoint(null);
                     setMode("select");
                   }}
@@ -6445,6 +6736,41 @@ function App() {
                   }
                 />
               )}
+
+              {mode === "select" && selectedObjectBounds && selectedObjectCount > 0 && (
+                <g className="selection-box">
+                  {(() => {
+                    const min = toDisplayPoint({
+                      x: selectedObjectBounds.minX,
+                      y: selectedObjectBounds.minY,
+                    });
+                    const max = toDisplayPoint({
+                      x: selectedObjectBounds.maxX,
+                      y: selectedObjectBounds.maxY,
+                    });
+                    const centerX = (min.x + max.x) / 2;
+                    const knobY = min.y - 28;
+                    return (
+                      <>
+                        <rect
+                          x={min.x}
+                          y={min.y}
+                          width={max.x - min.x}
+                          height={max.y - min.y}
+                        />
+                        <line x1={centerX} x2={centerX} y1={min.y} y2={knobY} />
+                        <circle
+                          className="selection-rotate-knob"
+                          cx={centerX}
+                          cy={knobY}
+                          r="7"
+                          onPointerDown={beginSelectionRotation}
+                        />
+                      </>
+                    );
+                  })()}
+                </g>
+              )}
             </svg>
           </div>
         </div>
@@ -6457,7 +6783,7 @@ function App() {
             "Click to add route points. Hold Shift to snap to 45 degrees. Backspace removes the previous point."}
           {mode === "device" && "Click on the floor plan to place the selected device."}
           {mode === "select" &&
-            "Select a cable or device. Drag cable dots or devices to reposition them. Alt/Option-click a cable to add a point."}
+            "Drag to select cables and devices. Cmd-click toggles objects. Drag the selection knob to rotate by 45 degrees."}
         </footer>
       </section>
 
