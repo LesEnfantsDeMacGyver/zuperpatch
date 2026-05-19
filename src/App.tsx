@@ -166,6 +166,15 @@ type RotatingSelection = {
   initialDevices: Device[];
   pointerId: number;
 };
+type DraggingSelection = {
+  attachedCablePoints: AttachedCablePoint[];
+  bounds: SelectionBounds;
+  cableIds: string[];
+  initialDevices: Device[];
+  initialRoutes: CableRoute[];
+  pointerId: number;
+  startPoint: Point;
+};
 type RouteEndpointReference = ReturnType<typeof routeEndpointReferences>[number];
 
 type FlowPath = {
@@ -443,6 +452,35 @@ function rotateRoute(route: CableRoute, center: Point, angleRadians: number): Ca
       ...branch,
       points: branch.points.map((point) => rotatePointAround(point, center, angleRadians)),
     })),
+  };
+}
+
+function translatePoint(point: Point, delta: Point): Point {
+  return {
+    x: point.x + delta.x,
+    y: point.y + delta.y,
+  };
+}
+
+function translateRoute(route: CableRoute, delta: Point): CableRoute {
+  return {
+    ...route,
+    points: route.points.map((point) => translatePoint(point, delta)),
+    branches: route.branches?.map((branch) => ({
+      ...branch,
+      points: branch.points.map((point) => translatePoint(point, delta)),
+    })),
+  };
+}
+
+function clampDeltaForBounds(
+  delta: Point,
+  bounds: SelectionBounds,
+  pageBounds: { width: number; height: number },
+): Point {
+  return {
+    x: clampNumber(delta.x, -bounds.minX, pageBounds.width - bounds.maxX),
+    y: clampNumber(delta.y, -bounds.minY, pageBounds.height - bounds.maxY),
   };
 }
 
@@ -1938,6 +1976,7 @@ function App() {
   const [draggingDevice, setDraggingDevice] = useState<DraggingDevice | null>(null);
   const [draggingCablePoint, setDraggingCablePoint] = useState<DraggingCablePoint | null>(null);
   const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
+  const [draggingSelection, setDraggingSelection] = useState<DraggingSelection | null>(null);
   const [rotatingSelection, setRotatingSelection] = useState<RotatingSelection | null>(null);
   const [selectedCablePoint, setSelectedCablePoint] = useState<SelectedCablePoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -4102,6 +4141,8 @@ function App() {
     setScaleDraft(snapshot.scaleDraft ? clonePoint(snapshot.scaleDraft) : null);
     setDraggingDevice(null);
     setDraggingCablePoint(null);
+    setDraggingSelection(null);
+    setRotatingSelection(null);
     setSelectedId(snapshot.selectedId);
     setSelectedDeviceIds(
       snapshot.selectedId && project.devices.some((device) => device.id === snapshot.selectedId)
@@ -4649,6 +4690,52 @@ function App() {
 
   function handlePointerMove(event: PointerEvent) {
     const point = pointerFromEvent(event);
+    if (draggingSelection) {
+      if (draggingSelection.pointerId !== event.pointerId) return;
+      const rawDelta = {
+        x: point.x - draggingSelection.startPoint.x,
+        y: point.y - draggingSelection.startPoint.y,
+      };
+      const delta = clampDeltaForBounds(rawDelta, draggingSelection.bounds, modelPageSize);
+      const selectedCableIdSet = new Set(draggingSelection.cableIds);
+
+      setDevices((current) =>
+        current.map((device) => {
+          const initialDevice = draggingSelection.initialDevices.find(
+            (candidate) => candidate.id === device.id,
+          );
+          return initialDevice
+            ? {
+                ...device,
+                point: translatePoint(initialDevice.point, delta),
+              }
+            : device;
+        }),
+      );
+      setCables((current) =>
+        current.map((route) => {
+          const initialRoute = draggingSelection.initialRoutes.find(
+            (candidate) => candidate.id === route.id,
+          );
+          if (!initialRoute) return route;
+          if (selectedCableIdSet.has(route.id)) return translateRoute(initialRoute, delta);
+
+          const attachments = draggingSelection.attachedCablePoints.filter(
+            (attachment) => attachment.routeId === route.id,
+          );
+          return attachments.reduce<CableRoute>(
+            (editedRoute, attachment) =>
+              routeWithCablePoint(
+                editedRoute,
+                attachment,
+                translatePoint(attachment.startPoint, delta),
+              ),
+            initialRoute,
+          );
+        }),
+      );
+      return;
+    }
     if (rotatingSelection) {
       if (rotatingSelection.pointerId !== event.pointerId) return;
       const angle = Math.atan2(point.y - rotatingSelection.center.y, point.x - rotatingSelection.center.x);
@@ -4865,6 +4952,11 @@ function App() {
   }
 
   function handlePointerUp(event: PointerEvent) {
+    if (draggingSelection && draggingSelection.pointerId === event.pointerId) {
+      setDraggingSelection(null);
+      finishUndoGroup();
+      return;
+    }
     if (selectionRect) {
       const bounds = normalizeBounds(selectionRect.start, pointerFromEvent(event));
       const didDrag = distance(selectionRect.start, pointerFromEvent(event)) > 4;
@@ -5050,13 +5142,6 @@ function App() {
     setSelectedCablePoint(null);
   }
 
-  function selectCables(routeIds: string[]) {
-    setSelectedCableIds(routeIds);
-    setSelectedDeviceIds([]);
-    setSelectedId(routeIds[0] ?? null);
-    setSelectedCablePoint(null);
-  }
-
   function selectObjects(deviceIds: string[], cableIds: string[]) {
     setSelectedDeviceIds(deviceIds);
     setSelectedCableIds(cableIds);
@@ -5095,6 +5180,51 @@ function App() {
       setSelectedId(selectedDeviceIds[0] ?? nextSelection[0] ?? null);
       setSelectedCablePoint(null);
       return nextSelection;
+    });
+  }
+
+  function beginSelectionDrag(
+    event: PointerEvent<SVGGElement>,
+    deviceIds: string[],
+    cableIds: string[],
+  ) {
+    const selectedDragDevices = devices.filter((device) => deviceIds.includes(device.id));
+    const selectedDragCables = cables.filter((route) => cableIds.includes(route.id));
+    const bounds = mergeBounds([
+      ...selectedDragDevices.map((device) => boundsFromPoints([device.point], 30)),
+      ...selectedDragCables.map(routeBounds),
+    ]);
+    if (!bounds || deviceIds.length + cableIds.length === 0) return;
+
+    event.stopPropagation();
+    beginUndoGroup();
+    const attachedCablePoints = selectedDragDevices.flatMap((device) =>
+      attachedCablePointsForDevice(device, cables),
+    );
+    const affectedRouteIds = new Set([
+      ...cableIds,
+      ...attachedCablePoints.map((attachment) => attachment.routeId),
+    ]);
+    setDraggingSelection({
+      attachedCablePoints,
+      bounds,
+      cableIds: [...cableIds],
+      initialDevices: selectedDragDevices.map((device) => ({
+        ...device,
+        point: clonePoint(device.point),
+      })),
+      initialRoutes: cables
+        .filter((route) => affectedRouteIds.has(route.id))
+        .map((route) => ({
+          ...route,
+          points: route.points.map(clonePoint),
+          branches: route.branches?.map((branch) => ({
+            ...branch,
+            points: branch.points.map(clonePoint),
+          })),
+        })),
+      pointerId: event.pointerId,
+      startPoint: pointerFromEvent(event),
     });
   }
 
@@ -6456,7 +6586,14 @@ function App() {
                       setMode("select");
                       return;
                     }
-                    selectCables([route.id]);
+                    const nextCableIds = selectedCableIds.includes(route.id)
+                      ? selectedCableIds
+                      : [route.id];
+                    const nextDeviceIds = selectedCableIds.includes(route.id)
+                      ? selectedDeviceIds
+                      : [];
+                    selectObjects(nextDeviceIds, nextCableIds);
+                    beginSelectionDrag(event, nextDeviceIds, nextCableIds);
                     setSelectedCablePoint(null);
                     setMode("select");
                   }}
@@ -6678,6 +6815,14 @@ function App() {
                         setMode("select");
                         return;
                       }
+                      if (mode === "select") {
+                        const isAlreadySelected = selectedDeviceIds.includes(device.id);
+                        const nextDeviceIds = isAlreadySelected ? selectedDeviceIds : [device.id];
+                        const nextCableIds = isAlreadySelected ? selectedCableIds : [];
+                        selectObjects(nextDeviceIds, nextCableIds);
+                        beginSelectionDrag(event, nextDeviceIds, nextCableIds);
+                        return;
+                      }
                       beginUndoGroup();
                       selectDevices([device.id]);
                       setDraggingDevice({
@@ -6783,7 +6928,7 @@ function App() {
             "Click to add route points. Hold Shift to snap to 45 degrees. Backspace removes the previous point."}
           {mode === "device" && "Click on the floor plan to place the selected device."}
           {mode === "select" &&
-            "Drag to select cables and devices. Cmd-click toggles objects. Drag the selection knob to rotate by 45 degrees."}
+            "Drag to select cables and devices. Drag selected objects to move them. Use the knob to rotate by 45 degrees."}
         </footer>
       </section>
 
