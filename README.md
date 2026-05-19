@@ -1,107 +1,117 @@
 # ZuperPatch!
 
-ZuperPatch! est un outil de planification de câblage sur plan.
+Préparer le câblage avant d’arriver sur site.
 
-Il aide à préparer une installation avant d’arriver sur site: importer un plan, définir une échelle fiable, tracer les câbles, positionner les équipements, vérifier les distances, repérer les charges et produire une liste de matériel exploitable.
+L’application transforme un plan de salle en espace de travail exploitable: on importe le plan, on fixe l’échelle, on trace les câbles, on place les équipements, puis on obtient les longueurs et le matériel nécessaire.
 
-L’objectif est simple: transformer un plan de salle en estimation claire, vérifiable et partageable.
+![Vue d’ensemble de l’espace de travail](docs/images/workspace-overview.jpg)
 
-## Ce que ZuperPatch! permet de faire
+## Le problème
 
-### Travailler directement sur un plan PDF
+Un plan technique finit souvent éparpillé entre un PDF annoté, quelques mesures approximatives, un tableur de matériel et des discussions de dernière minute.
 
-Importez un plan de sol au format PDF et utilisez-le comme base de travail. Le plan reste visible sous les éléments de câblage, avec un contrôle d’opacité pour l’adapter à la lisibilité du moment.
+Ici, tout reste au même endroit:
 
-En mode sombre, le plan est inversé pour garder un bon contraste sans perdre le confort visuel.
+- le plan
+- les câbles
+- les équipements
+- les capacités
+- les charges
+- la liste de matériel
 
-### Définir une échelle réelle
+Le résultat attendu est concret: moins d’oublis, des longueurs plus fiables, et une préparation plus facile à relire avec l’équipe.
 
-Tracez une distance connue sur le plan, indiquez sa longueur réelle, et ZuperPatch! convertit ensuite les tracés en mètres.
+## Le flux de travail
 
-C’est la base de tout le reste: les distances de câbles, les alertes de longueur et la liste de matériel s’appuient sur cette calibration.
+### 1. Importer le plan
 
-### Tracer plusieurs types de câbles
+Le plan PDF sert de fond de travail. Son opacité peut être ajustée pour garder les tracés lisibles, et le mode sombre inverse le rendu du plan pour conserver du contraste.
 
-ZuperPatch! prend en charge les familles de câbles utiles au pré-câblage événementiel et technique:
+### 2. Fixer l’échelle
+
+On trace une distance connue, on indique sa longueur réelle, et toutes les longueurs de câbles sont calculées à partir de cette référence.
+
+C’est ce qui permet de passer d’un dessin visuel à une estimation exploitable.
+
+### 3. Tracer les câbles
+
+Trois familles sont disponibles pour le moment:
 
 - Ethernet
 - Électrique
 - XLR
 
-Chaque câble connaît sa longueur maximale recommandée. Les tracés utilisent un rendu progressif pour rendre les longues distances plus faciles à lire pendant la conception.
+Chaque famille porte sa longueur maximale recommandée. Les tracés restent lisibles sur le plan et les longueurs se mettent à jour pendant le dessin.
 
-### Gérer les équipements du plan
+![Tracés de câbles sur le plan](docs/images/plan-cables.jpg)
 
-Ajoutez les équipements directement sur le plan:
+### 4. Placer les équipements
 
-- Sources électriques
-- Multiprises
-- Switches Ethernet
-- Clients Ethernet
-- Consommateurs électriques
+Le plan peut recevoir les éléments utiles à une installation terrain:
 
-Chaque équipement porte ses informations métier: nom, puissance disponible, puissance consommée, nombre de prises ou ports, besoin PoE, position de libellé, et connexions associées.
+- sources électriques
+- multiprises
+- switches Ethernet
+- clients Ethernet
+- consommateurs électriques
 
-### Vérifier les capacités et les raccordements
+Chaque équipement peut porter les informations qui comptent vraiment: nom, puissance disponible, puissance consommée, nombre de prises ou de ports, besoin PoE, position du libellé.
 
-ZuperPatch! ne se contente pas de dessiner des lignes.
+![Palette de câbles, équipements et réglages de vue](docs/images/palette-tools.jpg)
 
-L’outil suit les relations entre câbles et équipements pour éviter les incohérences évidentes:
+### 5. Vérifier les raccordements
 
-- Un consommateur électrique ne peut être alimenté qu’une seule fois.
-- Un client Ethernet se raccorde à un switch, pas à un autre client.
-- Les sources électriques et switches peuvent avoir une capacité configurée.
-- Les multiprises suivent les prises occupées, les prises libres souhaitées et leurs alimentations.
-- Les besoins PoE des clients remontent vers le switch concerné.
+Le dessin n’est pas seulement graphique. Les connexions gardent une logique métier:
+
+- un consommateur électrique ne peut pas être alimenté deux fois
+- un client Ethernet se raccorde à un switch
+- une source ou un switch peut avoir une capacité limitée
+- une multiprise suit ses prises occupées et ses prises libres souhaitées
+- un besoin PoE remonte vers le switch concerné
 
 Les équipements non raccordés peuvent être animés pour attirer l’attention sur ce qui reste à traiter.
 
-### Aider au placement et au dessin
+### 6. Lire les stats en direct
 
-L’interface est pensée pour dessiner vite, corriger vite, et rester lisible:
+La barre de droite donne une lecture immédiate du plan:
 
-- Accrochage des câbles à 45 degrés avec `Shift`
-- Ajout, déplacement et suppression de points intermédiaires
-- Détachement des extrémités de câble depuis leurs poignées
-- Déplacement d’un équipement avec ses câbles attachés
-- Pan temporaire avec la barre d’espace, comme dans les outils de dessin
-- Zoom jusqu’à 500 %
-- Restauration automatique du zoom, de la position et du projet
+- longueur totale par type de câble
+- nombre de routes
+- longueur maximale recommandée
+- souscription électrique
+- charge PoE
+- capacité de prises et de ports
 
-### Visualiser les flux
+![Statistiques live par famille de câble et charge électrique](docs/images/live-stats.jpg)
 
-Lorsqu’un équipement est sélectionné, ZuperPatch! peut montrer le chemin emprunté par l’énergie ou la donnée.
+### 7. Sortir la nomenclature
 
-Les flux sont dessinés à l’intérieur des traits existants pour garder le plan propre: ils servent à comprendre rapidement d’où vient l’alimentation, où passe le réseau, et quels liens sont impliqués.
+Le bouton `BOM PDF` génère une liste de matériel téléchargeable.
 
-### Suivre les statistiques en direct
+La nomenclature détaille les équipements et chaque câble individuel avec sa longueur requise. Les familles de câbles sont regroupées avec les mêmes couleurs que dans l’interface pour rendre le document lisible hors de l’outil.
 
-La barre latérale résume les distances par type de câble et signale les informations importantes:
+## Confort de dessin
 
-- Longueur totale par famille
-- Nombre de câbles tracés
-- Longueur maximale recommandée
-- Souscriptions électriques
-- Charges PoE
-- Capacités de prises et de ports
+Le planificateur reprend les gestes attendus dans un outil de dessin:
 
-Ces chiffres évoluent pendant que le plan est modifié.
+- `Shift` pour contraindre les câbles à 45 degrés
+- points intermédiaires éditables
+- suppression des points ou câbles sélectionnés
+- déplacement d’un équipement avec ses câbles attachés
+- détachement d’une extrémité de câble depuis sa poignée
+- barre d’espace pour passer temporairement en main et déplacer la vue
+- zoom jusqu’à 500 %
+- restauration automatique du zoom, de la position et du projet
 
-### Produire une liste de matériel
+## Sauvegarde et reprise
 
-ZuperPatch! génère un Bill of Materials téléchargeable en PDF.
+Le travail est sauvegardé automatiquement dans le navigateur.
 
-La liste détaille les équipements nécessaires et chaque câble individuel avec sa longueur requise. Les familles de câbles sont regroupées clairement avec les mêmes couleurs que dans l’interface, pour rendre le document lisible même hors de l’application.
-
-### Sauvegarder et reprendre le travail
-
-Le projet est sauvegardé automatiquement dans le navigateur.
-
-Il est aussi possible de télécharger et recharger un fichier projet pour archiver une version, transférer le travail ou reprendre une préparation plus tard.
+On peut aussi télécharger un fichier projet et le recharger plus tard pour archiver une version, transférer une préparation, ou reprendre le plan depuis un autre poste.
 
 ## Pour qui
 
-ZuperPatch! s’adresse aux équipes qui préparent des installations techniques avant intervention:
+Cet outil vise les équipes qui préparent des installations techniques avant intervention:
 
 - événementiel
 - audiovisuel
@@ -111,13 +121,7 @@ ZuperPatch! s’adresse aux équipes qui préparent des installations techniques
 - espaces techniques
 - déploiements ponctuels
 
-Il ne remplace pas une validation électrique réglementaire, mais il donne une base claire pour préparer le matériel, discuter le plan et réduire les oublis.
-
-## Philosophie
-
-ZuperPatch! vise un usage très concret: préparer le chantier, vérifier les longueurs, comprendre les dépendances et sortir une liste exploitable.
-
-Pas de dessin décoratif inutile. Pas de tableur bricolé à côté. Le plan, les câbles, les équipements, les capacités et le matériel restent dans le même outil.
+Il ne remplace pas une validation réglementaire, mais il donne une base de préparation claire: ce qui est prévu, ce qui est raccordé, ce qui manque, et ce qu’il faut apporter.
 
 ## Développement
 
