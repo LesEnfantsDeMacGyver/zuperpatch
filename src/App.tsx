@@ -134,6 +134,7 @@ type CablePointReference = DraggingCablePoint & {
 };
 
 type SelectedCablePoint = DraggingCablePoint;
+type ContinuingCablePoint = DraggingCablePoint;
 type ViewPosition = { scrollLeft: number; scrollTop: number };
 type SpacePanDrag = {
   pointerId: number;
@@ -968,6 +969,36 @@ function routeWithCablePoint(route: CableRoute, reference: DraggingCablePoint, p
   };
 }
 
+function routeWithExtendedEndpoint(
+  route: CableRoute,
+  reference: ContinuingCablePoint,
+  point: Point,
+) {
+  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
+    return {
+      ...route,
+      branches: route.branches?.map((branch) =>
+        branch.id === reference.branchId
+          ? {
+              ...branch,
+              points: [...branch.points, point],
+            }
+          : branch,
+      ),
+    };
+  }
+  if (reference.pointIndex === 0) {
+    return {
+      ...route,
+      points: [point, ...route.points],
+    };
+  }
+  return {
+    ...route,
+    points: [...route.points, point],
+  };
+}
+
 function closestCablePointSnap(
   point: Point,
   routes: CableRoute[],
@@ -1336,6 +1367,30 @@ function otherEndpointDevicesForPoint(
 function endpointDeviceIdForPoint(route: CableRoute, point: DraggingCablePoint) {
   return routeEndpointReferences(route).find((endpoint) => isSameEndpoint(endpoint, point))
     ?.deviceId;
+}
+
+function nextContinuationPointReference(
+  route: CableRoute,
+  reference: ContinuingCablePoint,
+) {
+  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
+    const branch = route.branches?.find((candidate) => candidate.id === reference.branchId);
+    return {
+      routeId: route.id,
+      branchId: reference.branchId,
+      branchPointIndex: Math.max(0, (branch?.points.length ?? 1) - 1),
+    };
+  }
+  if (reference.pointIndex === 0) {
+    return {
+      routeId: route.id,
+      pointIndex: 0,
+    };
+  }
+  return {
+    routeId: route.id,
+    pointIndex: route.points.length - 1,
+  };
 }
 
 function canAttachEndpointToDevice(
@@ -2111,6 +2166,7 @@ function App() {
   const [scalingSelection, setScalingSelection] = useState<ScalingSelection | null>(null);
   const [rotatingSelection, setRotatingSelection] = useState<RotatingSelection | null>(null);
   const [selectedCablePoint, setSelectedCablePoint] = useState<SelectedCablePoint | null>(null);
+  const [continuingCablePoint, setContinuingCablePoint] = useState<ContinuingCablePoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
   const [selectedCableIds, setSelectedCableIds] = useState<string[]>([]);
@@ -2432,6 +2488,10 @@ function App() {
       }
       if (event.key === "Backspace" && mode === "cable" && routeDraft.length > 0) {
         event.preventDefault();
+        if (continuingCablePoint || routeDraft.length === 1) {
+          clearRouteDraft();
+          return;
+        }
         setRouteDraft((current) => current.slice(0, -1));
         setRouteDraftDeviceIds((current) => current.slice(0, -1));
         setCursorPoint(null);
@@ -2449,12 +2509,10 @@ function App() {
         return;
       }
       if (event.key === "Escape") {
-        setRouteDraft([]);
-        setRouteDraftDeviceIds([]);
+        clearRouteDraft();
         setScaleDraft(null);
         setMeasurements([]);
         setMeasurementDraft(null);
-        setCursorPoint(null);
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -2487,11 +2545,19 @@ function App() {
 
   useEffect(() => {
     if (mode === "cable") return;
-    if (routeDraft.length === 0 && routeDraftDeviceIds.length === 0 && !cursorPoint) return;
+    if (
+      routeDraft.length === 0 &&
+      routeDraftDeviceIds.length === 0 &&
+      !cursorPoint &&
+      !continuingCablePoint
+    ) {
+      return;
+    }
     setRouteDraft([]);
     setRouteDraftDeviceIds([]);
     setCursorPoint(null);
-  }, [cursorPoint, mode, routeDraft.length, routeDraftDeviceIds.length]);
+    setContinuingCablePoint(null);
+  }, [continuingCablePoint, cursorPoint, mode, routeDraft.length, routeDraftDeviceIds.length]);
 
   useEffect(() => {
     if (mode === "measure") return;
@@ -2507,11 +2573,26 @@ function App() {
       previousContext.pageNumber !== pageNumber;
     cableDraftContextRef.current = { activeCable, pageNumber };
     if (!contextChanged) return;
-    if (routeDraft.length === 0 && routeDraftDeviceIds.length === 0 && !cursorPoint) return;
+    if (
+      routeDraft.length === 0 &&
+      routeDraftDeviceIds.length === 0 &&
+      !cursorPoint &&
+      !continuingCablePoint
+    ) {
+      return;
+    }
     setRouteDraft([]);
     setRouteDraftDeviceIds([]);
     setCursorPoint(null);
-  }, [activeCable, cursorPoint, pageNumber, routeDraft.length, routeDraftDeviceIds.length]);
+    setContinuingCablePoint(null);
+  }, [
+    activeCable,
+    continuingCablePoint,
+    cursorPoint,
+    pageNumber,
+    routeDraft.length,
+    routeDraftDeviceIds.length,
+  ]);
 
   const planningMode = mode === "cable" || mode === "device";
   const currentCables = cables.filter((route) => route.page === pageNumber);
@@ -4178,6 +4259,7 @@ function App() {
     setSelectedId(null);
     setSelectedDeviceIds([]);
     setSelectedCableIds([]);
+    setContinuingCablePoint(null);
     setStorageNotice("");
     queueViewPositionRestore(defaultViewPosition);
   }
@@ -4210,6 +4292,7 @@ function App() {
     setSelectedId(null);
     setSelectedDeviceIds([]);
     setSelectedCableIds([]);
+    setContinuingCablePoint(null);
     queueViewPositionRestore(project.viewPosition);
 
     if (project.pdfDataUrl) {
@@ -4323,6 +4406,7 @@ function App() {
     setDraggingSelection(null);
     setScalingSelection(null);
     setRotatingSelection(null);
+    setContinuingCablePoint(null);
     setSelectedId(snapshot.selectedId);
     setSelectedDeviceIds(
       snapshot.selectedId && project.devices.some((device) => device.id === snapshot.selectedId)
@@ -5283,6 +5367,7 @@ function App() {
     setRouteDraft([]);
     setRouteDraftDeviceIds([]);
     setCursorPoint(null);
+    setContinuingCablePoint(null);
   }
 
   function handlePlanScrollPointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -5619,6 +5704,11 @@ function App() {
   }
 
   function addCablePoint(point: Point, constrain: boolean, deviceId?: string) {
+    if (continuingCablePoint) {
+      extendContinuingCable(point, constrain, deviceId);
+      return;
+    }
+
     const targetDevice = deviceId
       ? devices.find((device) => device.id === deviceId)
       : undefined;
@@ -5670,6 +5760,121 @@ function App() {
 
     setRouteDraft(nextDraft);
     setRouteDraftDeviceIds(nextDeviceIds);
+    setCursorPoint(nextPoint);
+  }
+
+  function continuableEndpointTargets(route: CableRoute) {
+    const pointIndices = new Set<number>();
+    const branchPointKeys = new Set<string>();
+    if (
+      route.type !== activeCable ||
+      routeDraft.length > 0 ||
+      continuingCablePoint ||
+      route.page !== pageNumber
+    ) {
+      return { branchPointKeys, pointIndices };
+    }
+
+    routeEndpointReferences(route).forEach((endpoint) => {
+      if (endpoint.deviceId || isInternalCableJunctionEndpoint(route, endpoint)) return;
+      if (endpoint.branchId !== undefined && endpoint.branchPointIndex !== undefined) {
+        branchPointKeys.add(`${endpoint.branchId}:${endpoint.branchPointIndex}`);
+      } else if (endpoint.pointIndex !== undefined) {
+        pointIndices.add(endpoint.pointIndex);
+      }
+    });
+    return { branchPointKeys, pointIndices };
+  }
+
+  function beginCableContinuation(routeId: string, event: PointerEvent<SVGCircleElement>) {
+    const route = cables.find((currentRoute) => currentRoute.id === routeId);
+    if (!route || route.type !== activeCable || routeDraft.length > 0 || continuingCablePoint) {
+      return;
+    }
+
+    const branchId = event.currentTarget.dataset.branchId;
+    const pointReference =
+      branchId !== undefined
+        ? {
+            routeId,
+            branchId,
+            branchPointIndex: Number(event.currentTarget.dataset.branchPointIndex),
+          }
+        : {
+            routeId,
+            pointIndex: Number(event.currentTarget.dataset.pointIndex),
+          };
+    const endpoint = routeEndpointReferences(route).find((candidate) =>
+      isSameEndpoint(candidate, pointReference),
+    );
+    if (!endpoint || endpoint.deviceId || isInternalCableJunctionEndpoint(route, endpoint)) {
+      return;
+    }
+
+    event.stopPropagation();
+    setSelectedId(routeId);
+    setSelectedDeviceIds([]);
+    setSelectedCableIds([routeId]);
+    setSelectedCablePoint(null);
+    setContinuingCablePoint(pointReference);
+    setRouteDraft([endpoint.point]);
+    setRouteDraftDeviceIds([undefined]);
+    setCursorPoint(endpoint.point);
+  }
+
+  function extendContinuingCable(point: Point, constrain: boolean, deviceId?: string) {
+    if (!continuingCablePoint) return;
+    const route = cables.find((currentRoute) => currentRoute.id === continuingCablePoint.routeId);
+    if (!route) {
+      abortCableDraft();
+      return;
+    }
+    const endpointPoint = cablePointForReference(route, continuingCablePoint);
+    if (!endpointPoint) {
+      abortCableDraft();
+      return;
+    }
+
+    const targetDevice = deviceId
+      ? devices.find((device) => device.id === deviceId)
+      : undefined;
+    if (
+      targetDevice &&
+      (!canAttachEndpointToDevice(route, continuingCablePoint, targetDevice, devices) ||
+        !canAddCablePointForDevice(activeCable, targetDevice, cables, [undefined]) ||
+        (activeCable === "power" &&
+          (targetDevice.type === "consumer" || targetDevice.type === "switch") &&
+          directlyPoweredConsumerIds.has(targetDevice.id)))
+    ) {
+      abortCableDraft();
+      return;
+    }
+
+    const nextPoint = constrain ? constrainTo45Degrees(endpointPoint, point) : point;
+    const nextRoute = routeWithExtendedEndpoint(route, continuingCablePoint, nextPoint);
+    const nextReference = nextContinuationPointReference(nextRoute, continuingCablePoint);
+    const finalRoute = targetDevice
+      ? routeWithEndpointDeviceId(nextRoute, nextReference, targetDevice.id)
+      : nextRoute;
+
+    setCables((current) =>
+      current.map((currentRoute) =>
+        currentRoute.id === route.id ? finalRoute : currentRoute,
+      ),
+    );
+    setSelectedId(route.id);
+    setSelectedDeviceIds([]);
+    setSelectedCableIds([route.id]);
+
+    if (targetDevice) {
+      clearRouteDraft();
+      setMode("select");
+      return;
+    }
+
+    setContinuingCablePoint(nextReference);
+    setRouteDraft([nextPoint]);
+    setRouteDraftDeviceIds([undefined]);
     setCursorPoint(nextPoint);
   }
 
@@ -6934,7 +7139,9 @@ function App() {
                   }}
                   onPointPointerDown={
                     mode === "cable"
-                      ? undefined
+                      ? (event) => {
+                          beginCableContinuation(route.id, event);
+                        }
                       : (event) => {
                           beginCablePointDrag(route.id, event);
                         }
@@ -6942,6 +7149,16 @@ function App() {
                   branches={scaleBranches(route.branches, viewScale)}
                   colorPath={cableColorPathForRoute(route)}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
+                  interactiveBranchPointKeys={
+                    mode === "cable"
+                      ? continuableEndpointTargets(route).branchPointKeys
+                      : undefined
+                  }
+                  interactivePointIndices={
+                    mode === "cable"
+                      ? continuableEndpointTargets(route).pointIndices
+                      : undefined
+                  }
                   points={toDisplayPoints(route.points)}
                   selectedPointIndex={
                     selectedCablePoint?.routeId === route.id
@@ -7532,6 +7749,8 @@ function CableRouteView({
   meters,
   onSelect,
   onPointPointerDown,
+  interactiveBranchPointKeys,
+  interactivePointIndices,
   points,
   selectedPointIndex,
 }: {
@@ -7546,6 +7765,8 @@ function CableRouteView({
   meters: number;
   onSelect?: PointerEventHandler<SVGGElement>;
   onPointPointerDown?: PointerEventHandler<SVGCircleElement>;
+  interactiveBranchPointKeys?: Set<string>;
+  interactivePointIndices?: Set<number>;
   points: Point[];
   selectedPointIndex?: number;
 }) {
@@ -7661,12 +7882,15 @@ function CableRouteView({
       )}
       {points.map((point, index) => (
         <g key={`${point.x}-${point.y}-${index}`}>
-          {!draft && onPointPointerDown && (
+          {!draft &&
+            onPointPointerDown &&
+            (!interactivePointIndices || interactivePointIndices.has(index)) && (
             <circle
               className="route-node-hit"
               cx={point.x}
               cy={point.y}
               data-point-index={index}
+              onClick={(event) => event.stopPropagation()}
               onPointerDown={onPointPointerDown}
               r="11"
             />
@@ -7688,13 +7912,17 @@ function CableRouteView({
       {branches.flatMap((branch) =>
         branch.points.map((point, index) => (
           <g key={`${branch.id}-${point.x}-${point.y}-${index}`}>
-            {!draft && onPointPointerDown && (
+            {!draft &&
+              onPointPointerDown &&
+              (!interactiveBranchPointKeys ||
+                interactiveBranchPointKeys.has(`${branch.id}:${index}`)) && (
               <circle
                 className="route-node-hit"
                 cx={point.x}
                 cy={point.y}
                 data-branch-id={branch.id}
                 data-branch-point-index={index}
+                onClick={(event) => event.stopPropagation()}
                 onPointerDown={onPointPointerDown}
                 r="11"
               />

@@ -771,7 +771,8 @@ h2 {
 }
 
 .mode-cable .route-node-hit {
-  pointer-events: none;
+  cursor: copy;
+  pointer-events: all;
 }
 
 .app-shell:has(.cable-type-option.cable-type-ethernet:hover)
