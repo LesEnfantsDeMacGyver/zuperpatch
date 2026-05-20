@@ -14,6 +14,7 @@ import {
   Trash2,
   Undo2,
   Upload,
+  X,
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import * as pdfjsLib from "pdfjs-dist";
@@ -260,6 +261,12 @@ type LooseCableEndpointPulse = {
   angle: number;
   point: Point;
   pointIndex?: number;
+};
+
+type CableInfoDrag = {
+  pointerId: number;
+  startPointer: Point;
+  startPosition: Point;
 };
 
 type CableConfig = {
@@ -2172,7 +2179,9 @@ function undoSnapshotKey(snapshot: UndoSnapshot) {
 }
 
 function App() {
+  const cableInfoRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const planViewportRef = useRef<HTMLDivElement | null>(null);
   const projectLoadInputRef = useRef<HTMLInputElement | null>(null);
   const planScrollRef = useRef<HTMLDivElement | null>(null);
   const pendingViewPositionRef = useRef<ViewPosition | null>(null);
@@ -2217,6 +2226,9 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
   const [selectedCableIds, setSelectedCableIds] = useState<string[]>([]);
+  const [cableInfoDrag, setCableInfoDrag] = useState<CableInfoDrag | null>(null);
+  const [cableInfoPosition, setCableInfoPosition] = useState<Point | null>(null);
+  const [closedCableInfoRouteId, setClosedCableInfoRouteId] = useState<string | null>(null);
   const [copiedDevice, setCopiedDevice] = useState<Device | null>(null);
   const [poppedDeviceId, setPoppedDeviceId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -5942,6 +5954,7 @@ function App() {
       : selectedDeviceIds.length === 0 && selectedCableIds.length === 0
         ? currentCables.find((route) => route.id === selectedId)
         : undefined;
+  const selectedCableRouteId = selectedCableRoute?.id ?? null;
   const selectedCableInfo = (() => {
     if (!selectedCableRoute) return undefined;
     const config = cableTypes[selectedCableRoute.type];
@@ -5993,6 +6006,84 @@ function App() {
       rows: [],
     };
   })();
+  const selectedCableInfoOpen =
+    Boolean(selectedCableInfo && selectedCableRouteId !== null) &&
+    closedCableInfoRouteId !== selectedCableRouteId;
+  const cableInfoOverlayStyle = cableInfoPosition
+    ? {
+        left: `${cableInfoPosition.x}px`,
+        right: "auto",
+        top: `${cableInfoPosition.y}px`,
+      }
+    : undefined;
+
+  const clampCableInfoPosition = useCallback((position: Point) => {
+    const viewportRect = planViewportRef.current?.getBoundingClientRect();
+    const infoRect = cableInfoRef.current?.getBoundingClientRect();
+    if (!viewportRect || !infoRect) return position;
+
+    const margin = 12;
+    const maxX = Math.max(margin, viewportRect.width - infoRect.width - margin);
+    const maxY = Math.max(margin, viewportRect.height - infoRect.height - margin);
+    return {
+      x: Math.min(Math.max(margin, position.x), maxX),
+      y: Math.min(Math.max(margin, position.y), maxY),
+    };
+  }, []);
+
+  function currentCableInfoPosition() {
+    const viewportRect = planViewportRef.current?.getBoundingClientRect();
+    const infoRect = cableInfoRef.current?.getBoundingClientRect();
+    if (!viewportRect || !infoRect) return { x: 16, y: 16 };
+    return {
+      x: infoRect.left - viewportRect.left,
+      y: infoRect.top - viewportRect.top,
+    };
+  }
+
+  function beginCableInfoDrag(event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startPosition = cableInfoPosition ?? currentCableInfoPosition();
+    setCableInfoPosition(startPosition);
+    setCableInfoDrag({
+      pointerId: event.pointerId,
+      startPointer: { x: event.clientX, y: event.clientY },
+      startPosition,
+    });
+  }
+
+  useEffect(() => {
+    setClosedCableInfoRouteId(null);
+  }, [selectedCableRouteId]);
+
+  useEffect(() => {
+    if (!cableInfoDrag) return;
+
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      if (event.pointerId !== cableInfoDrag.pointerId) return;
+      setCableInfoPosition(
+        clampCableInfoPosition({
+          x: cableInfoDrag.startPosition.x + event.clientX - cableInfoDrag.startPointer.x,
+          y: cableInfoDrag.startPosition.y + event.clientY - cableInfoDrag.startPointer.y,
+        }),
+      );
+    };
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      if (event.pointerId === cableInfoDrag.pointerId) setCableInfoDrag(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointercancel", handlePointerUp);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointercancel", handlePointerUp);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [cableInfoDrag, clampCableInfoPosition]);
+
   const selectedMultiConsumerSourceValue =
     selectedCommonDeviceType !== "consumer"
       ? "mixed"
@@ -6989,14 +7080,15 @@ function App() {
           </div>
         </header>
 
-        <div className="plan-viewport">
-          {selectedCableInfo && (
-            <div className="viewport-overlay">
+        <div className="plan-viewport" ref={planViewportRef}>
+          {selectedCableInfoOpen && selectedCableInfo && selectedCableRouteId && (
+            <div className="viewport-overlay" style={cableInfoOverlayStyle}>
               <aside
                 className="cable-info-window"
                 aria-label="Selected cable information"
+                ref={cableInfoRef}
               >
-                <div className="cable-info-title">
+                <div className="cable-info-title" onPointerDown={beginCableInfoDrag}>
                   <span
                     className="cable-info-swatch"
                     style={{
@@ -7005,6 +7097,18 @@ function App() {
                     aria-hidden="true"
                   />
                   <h2>{selectedCableInfo.heading}</h2>
+                  <button
+                    aria-label="Close selected cable information"
+                    className="cable-info-close"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setClosedCableInfoRouteId(selectedCableRouteId);
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
                 </div>
                 {selectedCableInfo.rows.length > 0 && (
                   <dl>
