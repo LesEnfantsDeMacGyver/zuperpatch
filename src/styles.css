@@ -829,6 +829,16 @@ h2 {
   cursor: grabbing;
 }
 
+.loose-cable-end-pulse {
+  animation: orphan-device-pulse 1.35s ease-out infinite;
+  fill: none;
+  opacity: 0;
+  pointer-events: none;
+  stroke-linecap: round;
+  stroke-width: 3;
+  transform-box: view-box;
+}
+
 .draft-line {
   stroke-dasharray: 11 7;
 }
@@ -1036,7 +1046,8 @@ h2 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .device .orphan-pulse {
+  .device .orphan-pulse,
+  .loose-cable-end-pulse {
     animation: none;
     opacity: 0.55;
   }

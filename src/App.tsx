@@ -264,6 +264,11 @@ type ConduitCandidateSegment = {
   start: Point;
 };
 
+type LooseCableEndpointPulse = {
+  angle: number;
+  point: Point;
+};
+
 type CableConfig = {
   id: CableType;
   label: string;
@@ -449,6 +454,21 @@ function offsetPoint(point: Point, normal: Point, offset: number) {
     x: point.x + normal.x * offset,
     y: point.y + normal.y * offset,
   };
+}
+
+function arcPath(center: Point, radius: number, startAngle: number, endAngle: number) {
+  const start = {
+    x: center.x + Math.cos(startAngle) * radius,
+    y: center.y + Math.sin(startAngle) * radius,
+  };
+  const end = {
+    x: center.x + Math.cos(endAngle) * radius,
+    y: center.y + Math.sin(endAngle) * radius,
+  };
+  return [
+    `M ${start.x} ${start.y}`,
+    `A ${radius} ${radius} 0 0 1 ${end.x} ${end.y}`,
+  ].join(" ");
 }
 
 function clampPoint(point: Point, bounds: { width: number; height: number }) {
@@ -954,6 +974,39 @@ function isInternalCableJunctionEndpoint(
   const internalTrunkPoints =
     branches.length > 0 ? route.points.slice(1) : route.points.slice(1, -1);
   return internalTrunkPoints.some((point) => samePoint(point, endpoint.point));
+}
+
+function looseCableEndpointPulses(route: CableRoute, devicesById: Map<string, Device>) {
+  const endpoints = routeEndpointReferences(route);
+  const isAttachedEndpoint = (endpoint: RouteEndpointReference) =>
+    Boolean(endpoint.deviceId && devicesById.has(endpoint.deviceId));
+  const routeHasAttachedEndpoint = endpoints.some(isAttachedEndpoint);
+  if (!routeHasAttachedEndpoint) return [];
+
+  return endpoints.flatMap((endpoint): LooseCableEndpointPulse[] => {
+    if (isAttachedEndpoint(endpoint) || isInternalCableJunctionEndpoint(route, endpoint)) {
+      return [];
+    }
+
+    let adjacentPoint: Point | undefined;
+    if (endpoint.branchId !== undefined && endpoint.branchPointIndex !== undefined) {
+      const branch = route.branches?.find((candidate) => candidate.id === endpoint.branchId);
+      adjacentPoint =
+        endpoint.branchPointIndex > 0
+          ? branch?.points[endpoint.branchPointIndex - 1]
+          : route.points[route.points.length - 1];
+    } else if (endpoint.pointIndex === 0) {
+      adjacentPoint = route.points[1];
+    } else if (endpoint.pointIndex !== undefined) {
+      adjacentPoint = route.points[endpoint.pointIndex - 1];
+    }
+
+    if (!adjacentPoint) return [];
+    return [{
+      angle: Math.atan2(endpoint.point.y - adjacentPoint.y, endpoint.point.x - adjacentPoint.x),
+      point: endpoint.point,
+    }];
+  });
 }
 
 function closestPointOnSegment(point: Point, start: Point, end: Point) {
@@ -7432,6 +7485,14 @@ function App() {
                   colorPath={cableColorPathForRoute(route)}
                   conduitSegments={conduitSegmentLanes}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
+                  looseEndpointPulses={
+                    animateOrphans
+                      ? looseCableEndpointPulses(route, devicesById).map((pulse) => ({
+                          ...pulse,
+                          point: scalePoint(pulse.point, viewScale),
+                        }))
+                      : []
+                  }
                   interactiveBranchPointKeys={
                     mode === "cable"
                       ? continuableEndpointTargets(route).branchPointKeys
@@ -7460,6 +7521,7 @@ function App() {
                   draft
                   cableColorMode={cableColorMode}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
+                  looseEndpointPulses={[]}
                   points={toDisplayPoints(draftRoute)}
                   routeId="draft"
                 />
@@ -8045,6 +8107,7 @@ function CableRouteView({
   onPointPointerDown,
   interactiveBranchPointKeys,
   interactivePointIndices,
+  looseEndpointPulses,
   points,
   selectedPointIndex,
 }: {
@@ -8064,6 +8127,7 @@ function CableRouteView({
   onPointPointerDown?: PointerEventHandler<SVGCircleElement>;
   interactiveBranchPointKeys?: Set<string>;
   interactivePointIndices?: Set<number>;
+  looseEndpointPulses: LooseCableEndpointPulse[];
   points: Point[];
   selectedPointIndex?: number;
 }) {
@@ -8211,6 +8275,17 @@ function CableRouteView({
             );
           }),
       )}
+      {looseEndpointPulses.map((pulse, index) => (
+        <path
+          className="loose-cable-end-pulse"
+          d={arcPath(pulse.point, 16, pulse.angle - Math.PI / 4, pulse.angle + Math.PI / 4)}
+          key={`${pulse.point.x}-${pulse.point.y}-${index}`}
+          style={{
+            stroke: config.colorStart,
+            transformOrigin: `${pulse.point.x}px ${pulse.point.y}px`,
+          }}
+        />
+      ))}
       {points.map((point, index) => (
         <g key={`${point.x}-${point.y}-${index}`}>
           {!draft &&
