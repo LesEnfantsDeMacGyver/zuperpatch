@@ -6877,11 +6877,11 @@ function App() {
               aria-label="Cable color mode"
             >
               <button
-                className={cableColorMode === "length" ? "active" : ""}
+                className={cableColorMode === "type" ? "active" : ""}
                 type="button"
-                onClick={() => setCableColorMode("length")}
+                onClick={() => setCableColorMode("type")}
               >
-                Length
+                Type
               </button>
               <button
                 className={cableColorMode === "load" ? "active" : ""}
@@ -6891,11 +6891,11 @@ function App() {
                 Load
               </button>
               <button
-                className={cableColorMode === "type" ? "active" : ""}
+                className={cableColorMode === "length" ? "active" : ""}
                 type="button"
-                onClick={() => setCableColorMode("type")}
+                onClick={() => setCableColorMode("length")}
               >
-                Type
+                Length
               </button>
             </div>
           </div>
