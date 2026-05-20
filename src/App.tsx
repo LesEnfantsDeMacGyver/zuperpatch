@@ -234,6 +234,7 @@ type AutoSourceLinkRoute = {
 };
 
 type CableColorPath = {
+  branchLoadRatios?: Record<string, number>;
   loadRatio?: number;
   offsetPx: number;
   sourceBranchId?: string;
@@ -3381,144 +3382,106 @@ function App() {
     powerLoadWattsForDevice,
     powerstripSourceAssignments,
   ]);
-  const electricalRouteLoadRatios = useMemo(() => {
-    const ratios = new Map<string, number>();
+  const electricalRouteLoadPaths = useMemo(() => {
+    const paths = new Map<
+      string,
+      { branchLoadRatios: Record<string, number>; loadRatio: number }
+    >();
     const powerRoutes = cables.filter((route) => route.type === "power");
 
-    const routeFeedsPowerstrip = (route: CableRoute, powerstripId: string) =>
-      Boolean(
-        endpointForDevice(route, powerstripId) &&
-          upstreamEndpointForPowerRoute(route, powerstripId, devicesById, cables),
-      );
+    const endpointKey = (endpoint: RouteEndpointReference) =>
+      endpoint.branchId !== undefined
+        ? `branch:${endpoint.branchId}`
+        : `point:${endpoint.pointIndex ?? ""}`;
 
-    const powerstripDependsOnRoute = (
-      powerstripId: string,
-      routeId: string,
-      visitedRouteIds = new Set<string>(),
-      visitedPowerstripIds = new Set<string>(),
-    ): boolean => {
-      if (visitedPowerstripIds.has(powerstripId)) return false;
-      const powerstrip = devicesById.get(powerstripId);
-      if (!powerstrip || powerstrip.type !== "powerstrip") return false;
-
-      const nextVisitedPowerstripIds = new Set(visitedPowerstripIds);
-      nextVisitedPowerstripIds.add(powerstripId);
-
-      const directFeedDependsOnRoute = resolveDeviceCableAttachments(
-        powerstrip,
-        cables,
-        "power",
-      ).some(
-        (attachment) =>
-          routeFeedsPowerstrip(attachment.route, powerstripId) &&
-          routeDependsOnRoute(
-            attachment.route,
-            routeId,
-            visitedRouteIds,
-            nextVisitedPowerstripIds,
-          ),
-      );
-      if (directFeedDependsOnRoute) return true;
-
-      const assignment = powerstripSourceAssignments.find(
-        (candidate) => candidate.consumer.id === powerstripId,
-      );
-      const source = assignment?.source;
-      if (!source) return false;
-      if (source.type === "powerCable" && source.route) {
-        return routeDependsOnRoute(
-          source.route,
-          routeId,
-          visitedRouteIds,
-          nextVisitedPowerstripIds,
-        );
+    const assignmentTargetsEndpoint = (
+      assignment: ResolvedConsumerSource,
+      route: CableRoute,
+      endpoint: RouteEndpointReference,
+    ) => {
+      const source = assignment.source;
+      if (source?.type !== "powerCable" || source.route?.id !== route.id || !assignment.targetPoint) {
+        return false;
       }
-      if (source.type === "powerstrip") {
-        return powerstripDependsOnRoute(
-          source.id,
-          routeId,
-          visitedRouteIds,
-          nextVisitedPowerstripIds,
-        );
-      }
-      return false;
+      const nearestEndpoint = nearestRouteEndpoint(route, assignment.targetPoint);
+      return Boolean(nearestEndpoint && endpointKey(nearestEndpoint) === endpointKey(endpoint));
     };
 
-    function routeDependsOnRoute(
-      route: CableRoute,
-      routeId: string,
-      visitedRouteIds = new Set<string>(),
-      visitedPowerstripIds = new Set<string>(),
-    ): boolean {
-      if (route.id === routeId) return true;
-      if (visitedRouteIds.has(route.id)) return false;
-
-      const nextVisitedRouteIds = new Set(visitedRouteIds);
-      nextVisitedRouteIds.add(route.id);
-      const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById);
-      const sourceDevice = sourceEndpoint?.deviceId
-        ? devicesById.get(sourceEndpoint.deviceId)
-        : undefined;
-      if (sourceDevice?.type !== "powerstrip") return false;
-
-      return powerstripDependsOnRoute(
-        sourceDevice.id,
-        routeId,
-        nextVisitedRouteIds,
-        visitedPowerstripIds,
-      );
-    }
-
-    powerRoutes.forEach((route) => {
+    function endpointLoadWatts(route: CableRoute, endpoint: RouteEndpointReference) {
       const countedDeviceIds = new Set<string>();
       let totalW = 0;
-      const addLoad = (device: Device) => {
+
+      const addDeviceLoad = (device: Device) => {
         if (countedDeviceIds.has(device.id)) return;
         countedDeviceIds.add(device.id);
         totalW += powerLoadWattsForDevice(device);
       };
 
-      directPowerConsumerAttachments.forEach((assignment) => {
-        if (
-          assignment.attachments.some((attachment) =>
-            routeDependsOnRoute(attachment.route, route.id),
-          )
-        ) {
-          addLoad(assignment.consumer);
+      if (endpoint.deviceId) {
+        const device = devicesById.get(endpoint.deviceId);
+        if (device?.type === "powerstrip") {
+          totalW += powerstripLoadWattsById.get(device.id) ?? 0;
+        } else if (device) {
+          addDeviceLoad(device);
         }
-      });
+      }
 
       consumerSourceAssignments.forEach((assignment) => {
-        const source = assignment.source;
-        if (!source) return;
-        if (source.type === "powerCable" && source.route) {
-          if (routeDependsOnRoute(source.route, route.id)) addLoad(assignment.consumer);
-          return;
-        }
-        if (source.type === "powerstrip" && powerstripDependsOnRoute(source.id, route.id)) {
-          addLoad(assignment.consumer);
+        if (assignmentTargetsEndpoint(assignment, route, endpoint)) {
+          addDeviceLoad(assignment.consumer);
         }
       });
 
-      devices
-        .filter((device) => device.type === "powerstrip")
-        .forEach((powerstrip) => {
-          if (powerstripDependsOnRoute(powerstrip.id, route.id)) {
-            totalW += Math.max(0, powerstrip.desiredFreeSockets ?? 0) * desiredFreeSocketLoadW;
-          }
-        });
+      powerstripSourceAssignments.forEach((assignment) => {
+        if (assignmentTargetsEndpoint(assignment, route, endpoint)) {
+          totalW += powerstripLoadWattsById.get(assignment.consumer.id) ?? 0;
+        }
+      });
 
-      ratios.set(route.id, electricalLoadRatioForWatts(totalW));
+      return totalW;
+    }
+
+    powerRoutes.forEach((route) => {
+      const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById);
+      const sourceEndpointKey = sourceEndpoint ? endpointKey(sourceEndpoint) : undefined;
+      const endpoints = routeEndpointReferences(route).filter(
+        (endpoint) => !isInternalCableJunctionEndpoint(route, endpoint),
+      );
+      const downstreamEndpoints = endpoints.filter(
+        (endpoint) => endpointKey(endpoint) !== sourceEndpointKey,
+      );
+      const branchLoads = new Map<string, number>();
+      const branchLoadRatios: Record<string, number> = {};
+
+      (route.branches ?? []).forEach((branch) => {
+        const endpoint = downstreamEndpoints.find((candidate) => candidate.branchId === branch.id);
+        if (!endpoint) return;
+        const loadWatts = endpointLoadWatts(route, endpoint);
+        branchLoads.set(branch.id, loadWatts);
+        branchLoadRatios[branch.id] = electricalLoadRatioForWatts(loadWatts);
+      });
+
+      const loadWatts =
+        branchLoads.size > 0
+          ? Math.max(...Array.from(branchLoads.values()))
+          : downstreamEndpoints.reduce(
+              (sum, endpoint) => sum + endpointLoadWatts(route, endpoint),
+              0,
+            );
+
+      paths.set(route.id, {
+        branchLoadRatios,
+        loadRatio: electricalLoadRatioForWatts(loadWatts),
+      });
     });
 
-    return ratios;
+    return paths;
   }, [
     cables,
     consumerSourceAssignments,
-    devices,
     devicesById,
-    directPowerConsumerAttachments,
     powerLoadWattsForDevice,
+    powerstripLoadWattsById,
     powerstripSourceAssignments,
   ]);
   const attachedPowerPathPixelsToDeviceForColor = (
@@ -3614,8 +3577,10 @@ function App() {
   const cableColorPathForRoute = (route: CableRoute): CableColorPath | undefined => {
     if (route.type !== "power") return undefined;
     if (cableColorMode === "load") {
+      const loadPath = electricalRouteLoadPaths.get(route.id);
       return {
-        loadRatio: electricalRouteLoadRatios.get(route.id) ?? 0,
+        branchLoadRatios: loadPath?.branchLoadRatios,
+        loadRatio: loadPath?.loadRatio ?? 0,
         offsetPx: 0,
       };
     }
@@ -8134,7 +8099,10 @@ function CableRouteView({
   let travelled = 0;
   const maxLengthPx = displayPixelsPerMeter * config.maxLengthM;
   const ratioForPixels = (pixels: number) => (maxLengthPx ? pixels / maxLengthPx : 0);
-  const colorRatioForPixels = (pixels: number) => colorPath?.loadRatio ?? ratioForPixels(pixels);
+  const colorRatioForPixels = (pixels: number, branchId?: string) =>
+    branchId !== undefined && colorPath?.branchLoadRatios?.[branchId] !== undefined
+      ? colorPath.branchLoadRatios[branchId]
+      : colorPath?.loadRatio ?? ratioForPixels(pixels);
   const segmentColor = (ratio: number) =>
     cableColorMode === "type" ? config.colorStart : colorAtRatio(ratio);
   const trunkPixels = routePixels(points);
@@ -8259,8 +8227,8 @@ function CableRouteView({
                     y1={start.y}
                     y2={point.y}
                   >
-                    <stop offset="0%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled)))} />
-                    <stop offset="100%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled + segmentLength)))} />
+                    <stop offset="0%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled), branch.id))} />
+                    <stop offset="100%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled + segmentLength), branch.id))} />
                   </linearGradient>
                 </defs>
                 <line
