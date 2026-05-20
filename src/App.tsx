@@ -8167,9 +8167,9 @@ function FlowPathView({
           const activeGradientId = `${id}-${segment.id}-active`;
           const inactiveGradientId = `${id}-${segment.id}-inactive`;
           const primaryFrom = -segment.phase;
-          const primaryTo = primaryFrom - flowDashCyclePx * 2;
+          const primaryTo = primaryFrom + flowDashCyclePx * 2;
           const secondaryFrom = primaryFrom - flowDashCyclePx / 2;
-          const secondaryTo = secondaryFrom - flowDashCyclePx * 2;
+          const secondaryTo = secondaryFrom + flowDashCyclePx * 2;
           return (
             <g key={segment.id}>
               <path className="flow-track-path" d={segmentPath} style={{ stroke: `url(#${inactiveGradientId})` }} />
@@ -8204,7 +8204,7 @@ function FlowPathView({
               dur="1.45s"
               from="0"
               repeatCount="indefinite"
-              to={String(-flowDashCyclePx * 2)}
+              to={String(flowDashCyclePx * 2)}
             />
           </path>
           <path className="flow-stream-path secondary" d={pathData} style={{ stroke: activeColor }}>
@@ -8214,7 +8214,7 @@ function FlowPathView({
               dur="1.45s"
               from={String(-flowDashCyclePx / 2)}
               repeatCount="indefinite"
-              to={String(-flowDashCyclePx * 2.5)}
+              to={String(flowDashCyclePx * 1.5)}
             />
           </path>
         </>
