@@ -22,7 +22,14 @@ import type {
   PDFDocumentProxy,
   PDFPageProxy,
 } from "pdfjs-dist/types/src/display/api";
-import type { PointerEvent, PointerEventHandler, UIEvent, WheelEvent } from "react";
+import type {
+  MouseEvent,
+  MouseEventHandler,
+  PointerEvent,
+  PointerEventHandler,
+  UIEvent,
+  WheelEvent,
+} from "react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -239,6 +246,7 @@ type ConduitSegmentLane = {
   laneIndex: number;
   normal: Point;
   offsetPx: number;
+  routeIds: string[];
 };
 
 type ConduitCandidateSegment = {
@@ -603,6 +611,7 @@ function buildConduitSegmentLanes(routes: CableRoute[]) {
         laneIndex,
         normal: segment.normal,
         offsetPx: (laneIndex - (routeLanes.length - 1) / 2) * laneSpacing,
+        routeIds: routeLanes,
       });
     });
   });
@@ -2353,6 +2362,7 @@ function App() {
   const undoGroupStartSnapshotRef = useRef<UndoSnapshot | null>(null);
   const undoGroupStartKeyRef = useRef("");
   const cableDraftContextRef = useRef({ activeCable, pageNumber });
+  const conduitSegmentDraggedRef = useRef(false);
 
   const scalePixels = calibration ? distance(calibration.start, calibration.end) : 0;
   const knownDistanceM = Number(knownDistance);
@@ -5333,6 +5343,17 @@ function App() {
         x: editPoint.x - draggingConduitSegment.startPointer.x,
         y: editPoint.y - draggingConduitSegment.startPointer.y,
       };
+      if (!conduitSegmentDraggedRef.current && Math.hypot(delta.x, delta.y) <= 3) {
+        return;
+      }
+      if (!conduitSegmentDraggedRef.current) {
+        conduitSegmentDraggedRef.current = true;
+        beginUndoGroup();
+        setSelectedId(draggingConduitSegment.routeId);
+        setSelectedDeviceIds([]);
+        setSelectedCableIds([draggingConduitSegment.routeId]);
+        setSelectedCablePoint(null);
+      }
       setCables((current) =>
         current.map((route) => {
           if (route.id !== draggingConduitSegment.routeId) return route;
@@ -6309,11 +6330,7 @@ function App() {
     if (!route || pointIndex <= 1 || pointIndex >= route.points.length - 1) return;
 
     event.stopPropagation();
-    beginUndoGroup();
-    setSelectedId(routeId);
-    setSelectedDeviceIds([]);
-    setSelectedCableIds([routeId]);
-    setSelectedCablePoint(null);
+    conduitSegmentDraggedRef.current = false;
     setDraggingConduitSegment({
       initialEndPoint: clonePoint(route.points[pointIndex]),
       initialStartPoint: clonePoint(route.points[pointIndex - 1]),
@@ -6322,6 +6339,34 @@ function App() {
       routeId,
       startPointer: pointerFromEvent(event, false),
     });
+  }
+
+  function cycleConduitSelection(routeId: string, event: MouseEvent<SVGLineElement>) {
+    event.stopPropagation();
+    if (conduitSegmentDraggedRef.current) {
+      conduitSegmentDraggedRef.current = false;
+      return;
+    }
+
+    const routeIds = (event.currentTarget.dataset.routeIds ?? "")
+      .split(",")
+      .filter(Boolean);
+    if (routeIds.length < 2) {
+      selectObjects([], [routeId]);
+      setMode("select");
+      return;
+    }
+
+    const currentRouteId =
+      selectedCableIds.length === 1 && routeIds.includes(selectedCableIds[0])
+        ? selectedCableIds[0]
+        : routeIds.includes(selectedId ?? "")
+          ? selectedId
+          : undefined;
+    const currentIndex = currentRouteId ? routeIds.indexOf(currentRouteId) : -1;
+    const nextRouteId = routeIds[(currentIndex + 1 + routeIds.length) % routeIds.length];
+    selectObjects([], [nextRouteId]);
+    setMode("select");
   }
 
   return (
@@ -7390,6 +7435,13 @@ function App() {
                         }
                       : undefined
                   }
+                  onConduitSegmentClick={
+                    mode === "select"
+                      ? (event) => {
+                          cycleConduitSelection(route.id, event);
+                        }
+                      : undefined
+                  }
                   branches={scaleBranches(route.branches, viewScale)}
                   colorPath={cableColorPathForRoute(route)}
                   conduitSegments={conduitSegmentLanes}
@@ -7996,6 +8048,7 @@ function CableRouteView({
   meters,
   routeId,
   onSelect,
+  onConduitSegmentClick,
   onConduitSegmentPointerDown,
   onPointPointerDown,
   interactiveBranchPointKeys,
@@ -8015,6 +8068,7 @@ function CableRouteView({
   meters: number;
   routeId: string;
   onSelect?: PointerEventHandler<SVGGElement>;
+  onConduitSegmentClick?: MouseEventHandler<SVGLineElement>;
   onConduitSegmentPointerDown?: PointerEventHandler<SVGLineElement>;
   onPointPointerDown?: PointerEventHandler<SVGCircleElement>;
   interactiveBranchPointKeys?: Set<string>;
@@ -8103,11 +8157,23 @@ function CableRouteView({
               y2={displayEnd.y}
               style={{ stroke: `url(#${gradientId})` }}
             />
-            {conduitLane?.draggable && onConduitSegmentPointerDown && (
+            {conduitLane && (onConduitSegmentClick || onConduitSegmentPointerDown) && (
               <line
-                className="conduit-segment-hit"
+                className={[
+                  "conduit-segment-hit",
+                  conduitLane.draggable ? "draggable" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 data-point-index={pointIndex}
-                onPointerDown={onConduitSegmentPointerDown}
+                data-route-ids={conduitLane.routeIds.join(",")}
+                onClick={onConduitSegmentClick}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  if (conduitLane.draggable) {
+                    onConduitSegmentPointerDown?.(event);
+                  }
+                }}
                 x1={displayStart.x}
                 x2={displayEnd.x}
                 y1={displayStart.y}
