@@ -6999,26 +6999,7 @@ function App() {
           </div>
         </header>
 
-        <div
-          className={[
-            "plan-scroll",
-            isSpacePressed ? "space-panning" : "",
-            isPanningWithSpace ? "is-panning" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          onPointerCancelCapture={finishSpacePan}
-          onPointerCancel={handlePlanScrollPointerUp}
-          onPointerDown={handlePlanScrollPointerDown}
-          onPointerDownCapture={handleSpacePanPointerDown}
-          onPointerMove={handlePlanScrollPointerMove}
-          onPointerMoveCapture={handleSpacePanPointerMove}
-          onPointerUp={handlePlanScrollPointerUp}
-          onPointerUpCapture={finishSpacePan}
-          onScroll={handlePlanScroll}
-          onWheel={handlePlanWheel}
-          ref={planScrollRef}
-        >
+        <div className="plan-viewport">
           {selectedCableInfo && (
             <div className="viewport-overlay">
               <aside
@@ -7039,33 +7020,53 @@ function App() {
             </div>
           )}
           <div
-            className={`plan-stage mode-${mode}`}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            ref={stageRef}
-            style={{ width: pageSize.width, height: pageSize.height }}
+            className={[
+              "plan-scroll",
+              isSpacePressed ? "space-panning" : "",
+              isPanningWithSpace ? "is-panning" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            onPointerCancelCapture={finishSpacePan}
+            onPointerCancel={handlePlanScrollPointerUp}
+            onPointerDown={handlePlanScrollPointerDown}
+            onPointerDownCapture={handleSpacePanPointerDown}
+            onPointerMove={handlePlanScrollPointerMove}
+            onPointerMoveCapture={handleSpacePanPointerMove}
+            onPointerUp={handlePlanScrollPointerUp}
+            onPointerUpCapture={finishSpacePan}
+            onScroll={handlePlanScroll}
+            onWheel={handlePlanWheel}
+            ref={planScrollRef}
           >
-            <canvas
-              aria-label="Rendered floor plan"
-              className={pdfDoc ? "pdf-canvas" : "pdf-canvas empty"}
-              ref={canvasRef}
-              style={{ opacity: floorPlanOpacity }}
-            />
-            {!pdfDoc && (
-              <div className="empty-state">
-                <FileUp aria-hidden="true" />
-                <strong>Upload a PDF floor plan</strong>
-                <span>Then draw a known distance to set the scale.</span>
-              </div>
-            )}
-            {rendering && <div className="render-badge">Rendering PDF</div>}
-            <svg
-              className="overlay"
-              height={pageSize.height}
-              viewBox={`0 0 ${pageSize.width} ${pageSize.height}`}
-              width={pageSize.width}
+            <div
+              className={`plan-stage mode-${mode}`}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              ref={stageRef}
+              style={{ width: pageSize.width, height: pageSize.height }}
             >
+              <canvas
+                aria-label="Rendered floor plan"
+                className={pdfDoc ? "pdf-canvas" : "pdf-canvas empty"}
+                ref={canvasRef}
+                style={{ opacity: floorPlanOpacity }}
+              />
+              {!pdfDoc && (
+                <div className="empty-state">
+                  <FileUp aria-hidden="true" />
+                  <strong>Upload a PDF floor plan</strong>
+                  <span>Then draw a known distance to set the scale.</span>
+                </div>
+              )}
+              {rendering && <div className="render-badge">Rendering PDF</div>}
+              <svg
+                className="overlay"
+                height={pageSize.height}
+                viewBox={`0 0 ${pageSize.width} ${pageSize.height}`}
+                width={pageSize.width}
+              >
               <defs>
                 <filter id="label-bg" x="-10%" y="-10%" width="120%" height="120%">
                   <feDropShadow dx="0" dy="1" floodOpacity="0.18" stdDeviation="2" />
@@ -7476,8 +7477,8 @@ function App() {
                 />
               )}
 
-            </svg>
-            {mode === "select" && selectedObjectBounds && selectedObjectCount > 1 && (() => {
+              </svg>
+              {mode === "select" && selectedObjectBounds && selectedObjectCount > 1 && (() => {
               const min = toDisplayPoint({
                 x: selectedObjectBounds.minX,
                 y: selectedObjectBounds.minY,
@@ -7540,7 +7541,8 @@ function App() {
                   />
                 </>
               );
-            })()}
+              })()}
+            </div>
           </div>
         </div>
 
