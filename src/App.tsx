@@ -1749,11 +1749,7 @@ function preferredPowerSourceEndpoint(route: CableRoute, devicesById: Map<string
   const endpoints = routeEndpointReferences(route);
   return (
     endpoints.find((endpoint) => endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "producer") ??
-    endpoints.find((endpoint) => endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "powerstrip") ??
-    endpoints.find((endpoint) => {
-      if (!endpoint.deviceId) return true;
-      return devicesById.get(endpoint.deviceId)?.type !== "consumer";
-    })
+    endpoints.find((endpoint) => endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "powerstrip")
   );
 }
 
@@ -1960,7 +1956,7 @@ function upstreamEndpointForPowerRoute(
   );
   if (producerEndpoint) return producerEndpoint;
   return candidateEndpoints.find((endpoint) => {
-    if (!endpoint.deviceId) return true;
+    if (!endpoint.deviceId) return false;
     if (devicesById.get(endpoint.deviceId)?.type !== "powerstrip") return false;
     return Boolean(
       upstreamProducerIdForPowerstrip(
@@ -3538,7 +3534,10 @@ function App() {
                   const endpointDevice = endpoint.deviceId
                     ? devicesById.get(endpoint.deviceId)
                     : undefined;
-                  return endpointDevice?.type !== "consumer" && endpointDevice?.type !== "switch";
+                  return (
+                    endpointDevice?.type === "producer" ||
+                    endpointDevice?.type === "powerstrip"
+                  );
                 })
                 .map((endpoint) => {
                   const endpointDevice = endpoint.deviceId
