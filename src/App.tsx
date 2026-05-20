@@ -274,7 +274,10 @@ type ConduitCandidateSegment = {
 
 type LooseCableEndpointPulse = {
   angle: number;
+  branchId?: string;
+  branchPointIndex?: number;
   point: Point;
+  pointIndex?: number;
 };
 
 type CableConfig = {
@@ -1012,7 +1015,10 @@ function looseCableEndpointPulses(route: CableRoute, devicesById: Map<string, De
     if (!adjacentPoint) return [];
     return [{
       angle: Math.atan2(endpoint.point.y - adjacentPoint.y, endpoint.point.x - adjacentPoint.x),
+      branchId: endpoint.branchId,
+      branchPointIndex: endpoint.branchPointIndex,
       point: endpoint.point,
+      pointIndex: endpoint.pointIndex,
     }];
   });
 }
@@ -8232,6 +8238,28 @@ function CableRouteView({
     sourceBranchPixels !== undefined
       ? (colorPath?.offsetPx ?? 0) + sourceBranchPixels + Math.max(0, trunkPixels - pixels)
       : (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceTrunkPixels);
+  const branchColorDistance = (branchId: string, pixels: number) =>
+    colorPath?.sourceBranchId === branchId && sourceBranchPixels !== undefined
+      ? (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceBranchPixels)
+      : colorDistanceForTrunkPixels(trunkPixels) + pixels;
+  const looseEndpointPulseColor = (pulse: LooseCableEndpointPulse) => {
+    if (pulse.branchId !== undefined) {
+      const branch = branches.find((candidate) => candidate.id === pulse.branchId);
+      if (branch) {
+        const branchPath = branchPathPoints({ id: "", page: 0, points, type: config.id }, branch);
+        const branchPointIndex = pulse.branchPointIndex ?? branch.points.length - 1;
+        const pathPointIndex = Math.min(branchPath.length - 1, branchPointIndex + 1);
+        const pixels = routePixels(branchPath.slice(0, pathPointIndex + 1));
+        return segmentColor(colorRatioForPixels(branchColorDistance(branch.id, pixels), branch.id));
+      }
+    }
+    const pointIndex = pulse.pointIndex ?? points.findIndex((point) => samePoint(point, pulse.point));
+    const pixels =
+      pointIndex >= 0 && pointIndex < points.length
+        ? cumulativePixelsAtPoint(points, pointIndex)
+        : routePixels(points);
+    return segmentColor(colorRatioForPixels(colorDistanceForTrunkPixels(pixels)));
+  };
   return (
     <g
       className={[
@@ -8324,10 +8352,6 @@ function CableRouteView({
             const branchTravelled = routePixels(branchPath.slice(0, index + 1));
             const segmentLength = distance(start, point);
             const gradientId = `${config.id}-${branch.id}-${start.x}-${start.y}-${point.x}-${point.y}`;
-            const branchColorDistance = (pixels: number) =>
-              colorPath?.sourceBranchId === branch.id && sourceBranchPixels !== undefined
-                ? (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceBranchPixels)
-                : colorDistanceForTrunkPixels(trunkPixels) + pixels;
             return (
               <g key={`${branch.id}-${point.x}-${point.y}-${index}`}>
                 <defs>
@@ -8339,8 +8363,8 @@ function CableRouteView({
                     y1={start.y}
                     y2={point.y}
                   >
-                    <stop offset="0%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled), branch.id))} />
-                    <stop offset="100%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled + segmentLength), branch.id))} />
+                    <stop offset="0%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branch.id, branchTravelled), branch.id))} />
+                    <stop offset="100%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branch.id, branchTravelled + segmentLength), branch.id))} />
                   </linearGradient>
                 </defs>
                 <line
@@ -8361,7 +8385,7 @@ function CableRouteView({
           d={arcPath(pulse.point, 16, pulse.angle - Math.PI / 4, pulse.angle + Math.PI / 4)}
           key={`${pulse.point.x}-${pulse.point.y}-${index}`}
           style={{
-            stroke: config.colorStart,
+            stroke: looseEndpointPulseColor(pulse),
             transformOrigin: `${pulse.point.x}px ${pulse.point.y}px`,
           }}
         />
