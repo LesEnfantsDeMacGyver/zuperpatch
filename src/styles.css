@@ -554,6 +554,7 @@ h2 {
   min-width: 0;
   overflow: auto;
   padding: 1rem;
+  position: relative;
 }
 
 .plan-scroll.space-panning,
@@ -638,6 +639,51 @@ h2 {
   right: 12px;
   top: 12px;
   z-index: 2;
+}
+
+.viewport-overlay {
+  align-items: flex-start;
+  display: flex;
+  height: 0;
+  justify-content: flex-end;
+  pointer-events: none;
+  position: sticky;
+  right: 1rem;
+  top: 1rem;
+  z-index: 6;
+}
+
+.cable-info-window {
+  background: color-mix(in srgb, var(--color-panel) 94%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  border-top: 4px solid var(--color-brand);
+  box-shadow: 0 14px 32px var(--color-shadow);
+  min-width: 220px;
+  padding: 0.75rem;
+  pointer-events: auto;
+  width: min(280px, calc(100% - 2rem));
+}
+
+.cable-info-window h2 {
+  color: var(--color-text);
+  font-size: 0.95rem;
+  margin: 0 0 0.65rem;
+}
+
+.cable-info-window dl {
+  grid-template-columns: 1fr;
+  gap: 0.45rem;
+}
+
+.cable-info-window dl div {
+  background: var(--color-soft);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+}
+
+.cable-info-window dd {
+  font-size: 1.05rem;
 }
 
 .overlay {

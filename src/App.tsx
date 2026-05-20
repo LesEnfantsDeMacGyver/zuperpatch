@@ -241,6 +241,13 @@ type CableColorPath = {
   sourcePointIndex?: number;
 };
 
+type ElectricalRouteLoadPath = {
+  branchLoadRatios: Record<string, number>;
+  branchLoadWatts: Record<string, number>;
+  loadRatio: number;
+  loadWatts: number;
+};
+
 type ConduitSegmentLane = {
   draggable: boolean;
   laneCount: number;
@@ -1468,8 +1475,34 @@ function powerLabel(watts: number) {
   return `${unit.format(watts)} W`;
 }
 
+function wattsLabel(watts: number) {
+  return `${integerUnit.format(watts)} W`;
+}
+
 function electricalLoadRatioForWatts(watts: number) {
   return electricalCordMaxLoadW ? watts / electricalCordMaxLoadW : 0;
+}
+
+function electricalLoadAmps(watts: number) {
+  return electricalReferenceVoltageV ? watts / electricalReferenceVoltageV : 0;
+}
+
+function recommendedCopperSection(watts: number) {
+  const amps = electricalLoadAmps(watts);
+  if (amps <= 10) return "1.5 mm²";
+  if (amps <= 16) return "2.5 mm²";
+  if (amps <= 25) return "4 mm²";
+  if (amps <= 32) return "6 mm²";
+  if (amps <= 40) return "10 mm²";
+  if (amps <= 63) return "16 mm²";
+  return "> 16 mm²";
+}
+
+function recommendedEthernetCategory(lengthMeters: number | undefined) {
+  if (lengthMeters === undefined) return "Set scale";
+  if (lengthMeters <= 55) return "Cat 6";
+  if (lengthMeters <= 100) return "Cat 6A";
+  return "Fiber or active extension";
 }
 
 function countByDeviceType(devices: Device[], type: DeviceType) {
@@ -3383,10 +3416,7 @@ function App() {
     powerstripSourceAssignments,
   ]);
   const electricalRouteLoadPaths = useMemo(() => {
-    const paths = new Map<
-      string,
-      { branchLoadRatios: Record<string, number>; loadRatio: number }
-    >();
+    const paths = new Map<string, ElectricalRouteLoadPath>();
     const powerRoutes = cables.filter((route) => route.type === "power");
 
     const endpointKey = (endpoint: RouteEndpointReference) =>
@@ -3452,12 +3482,14 @@ function App() {
       );
       const branchLoads = new Map<string, number>();
       const branchLoadRatios: Record<string, number> = {};
+      const branchLoadWatts: Record<string, number> = {};
 
       (route.branches ?? []).forEach((branch) => {
         const endpoint = downstreamEndpoints.find((candidate) => candidate.branchId === branch.id);
         if (!endpoint) return;
         const loadWatts = endpointLoadWatts(route, endpoint);
         branchLoads.set(branch.id, loadWatts);
+        branchLoadWatts[branch.id] = loadWatts;
         branchLoadRatios[branch.id] = electricalLoadRatioForWatts(loadWatts);
       });
 
@@ -3471,7 +3503,9 @@ function App() {
 
       paths.set(route.id, {
         branchLoadRatios,
+        branchLoadWatts,
         loadRatio: electricalLoadRatioForWatts(loadWatts),
+        loadWatts,
       });
     });
 
@@ -6228,6 +6262,65 @@ function App() {
       : selectedDeviceIds.length === 0 && selectedCableIds.length === 0
         ? currentCables.find((route) => route.id === selectedId)
         : undefined;
+  const selectedCableInfo = (() => {
+    if (!selectedCableRoute) return undefined;
+    const config = cableTypes[selectedCableRoute.type];
+    const pathPixels = routeCablePathPixels(selectedCableRoute);
+    const materialMeters = pixelsPerMeter
+      ? routeMaterialPixels(selectedCableRoute) / pixelsPerMeter
+      : undefined;
+    const longestRunMeters = pixelsPerMeter && pathPixels.length > 0
+      ? Math.max(...pathPixels) / pixelsPerMeter
+      : undefined;
+    if (selectedCableRoute.type === "power") {
+      const loadPath = electricalRouteLoadPaths.get(selectedCableRoute.id);
+      const loadWatts = loadPath?.loadWatts ?? 0;
+      return {
+        accent: config.colorStart,
+        heading: config.label,
+        rows: [
+          {
+            label: "Length",
+            value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
+          },
+          {
+            label: (selectedCableRoute.branches?.length ?? 0) > 0 ? "Load (max branch)" : "Load",
+            value: wattsLabel(loadWatts),
+          },
+          {
+            label: "Copper section (EU)",
+            value: recommendedCopperSection(loadWatts),
+          },
+        ],
+      };
+    }
+    if (selectedCableRoute.type === "ethernet") {
+      return {
+        accent: config.colorStart,
+        heading: config.label,
+        rows: [
+          {
+            label: "Length",
+            value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
+          },
+          {
+            label: "Category",
+            value: recommendedEthernetCategory(longestRunMeters),
+          },
+        ],
+      };
+    }
+    return {
+      accent: config.colorStart,
+      heading: config.label,
+      rows: [
+        {
+          label: "Length",
+          value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
+        },
+      ],
+    };
+  })();
   const selectedMultiConsumerSourceValue =
     selectedCommonDeviceType !== "consumer"
       ? "mixed"
@@ -7273,6 +7366,25 @@ function App() {
           onWheel={handlePlanWheel}
           ref={planScrollRef}
         >
+          {selectedCableInfo && (
+            <div className="viewport-overlay">
+              <aside
+                className="cable-info-window"
+                style={{ borderTopColor: selectedCableInfo.accent }}
+                aria-label="Selected cable information"
+              >
+                <h2>{selectedCableInfo.heading}</h2>
+                <dl>
+                  {selectedCableInfo.rows.map((row) => (
+                    <div key={row.label}>
+                      <dt>{row.label}</dt>
+                      <dd>{row.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </aside>
+            </div>
+          )}
           <div
             className={`plan-stage mode-${mode}`}
             onPointerDown={handlePointerDown}
