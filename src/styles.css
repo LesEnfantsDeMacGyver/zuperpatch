@@ -661,23 +661,39 @@ h2 {
   background: color-mix(in srgb, var(--color-panel) 94%, transparent);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  border-top: 4px solid var(--color-brand);
   box-shadow: 0 14px 32px var(--color-shadow);
-  min-width: 220px;
-  padding: 0.75rem;
+  min-width: 260px;
+  padding: 0.9rem;
   pointer-events: auto;
-  width: min(280px, calc(100% - 2rem));
+  width: min(340px, calc(100% - 2rem));
+}
+
+.cable-info-title {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+  margin-bottom: 0.8rem;
+}
+
+.cable-info-swatch {
+  border-radius: 999px;
+  display: block;
+  flex: 0 0 auto;
+  height: 16px;
+  width: 42px;
 }
 
 .cable-info-window h2 {
   color: var(--color-text);
-  font-size: 0.95rem;
-  margin: 0 0 0.65rem;
+  font-size: 1.1rem;
+  line-height: 1.15;
+  margin: 0;
 }
 
 .cable-info-window dl {
   grid-template-columns: 1fr;
   gap: 0.45rem;
+  margin: 0;
 }
 
 .cable-info-window dl div {

@@ -941,8 +941,6 @@ function looseCableEndpointPulses(route: CableRoute, devicesById: Map<string, De
   const endpoints = routeEndpointReferences(route);
   const isAttachedEndpoint = (endpoint: RouteEndpointReference) =>
     Boolean(endpoint.deviceId && devicesById.has(endpoint.deviceId));
-  const routeHasAttachedEndpoint = endpoints.some(isAttachedEndpoint);
-  if (!routeHasAttachedEndpoint) return [];
 
   return endpoints.flatMap((endpoint): LooseCableEndpointPulse[] => {
     if (isAttachedEndpoint(endpoint) || isInternalCableJunctionEndpoint(route, endpoint)) {
@@ -5951,23 +5949,22 @@ function App() {
     const materialMeters = pixelsPerMeter
       ? routeMaterialPixels(selectedCableRoute) / pixelsPerMeter
       : undefined;
+    const lengthText = materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale";
     const longestRunMeters = pixelsPerMeter && pathPixels.length > 0
       ? Math.max(...pathPixels) / pixelsPerMeter
       : undefined;
     if (selectedCableRoute.type === "power") {
       const loadPath = electricalRouteLoadPaths.get(selectedCableRoute.id);
       const loadWatts = loadPath?.loadWatts ?? 0;
+      const loadAmps = electricalLoadAmps(loadWatts);
       return {
-        accent: config.colorStart,
-        heading: config.label,
+        colorEnd: config.colorEnd,
+        colorStart: config.colorStart,
+        heading: `${config.label} (${lengthText})`,
         rows: [
           {
-            label: "Length",
-            value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
-          },
-          {
             label: "Load",
-            value: wattsLabel(loadWatts),
+            value: `${electricalReferenceVoltageV} V × ${unit.format(loadAmps)} A = ${wattsLabel(loadWatts)}`,
           },
           {
             label: "Copper section (EU)",
@@ -5978,13 +5975,10 @@ function App() {
     }
     if (selectedCableRoute.type === "ethernet") {
       return {
-        accent: config.colorStart,
-        heading: config.label,
+        colorEnd: config.colorEnd,
+        colorStart: config.colorStart,
+        heading: `${config.label} (${lengthText})`,
         rows: [
-          {
-            label: "Length",
-            value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
-          },
           {
             label: "Category",
             value: recommendedEthernetCategory(longestRunMeters),
@@ -5993,14 +5987,10 @@ function App() {
       };
     }
     return {
-      accent: config.colorStart,
-      heading: config.label,
-      rows: [
-        {
-          label: "Length",
-          value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
-        },
-      ],
+      colorEnd: config.colorEnd,
+      colorStart: config.colorStart,
+      heading: `${config.label} (${lengthText})`,
+      rows: [],
     };
   })();
   const selectedMultiConsumerSourceValue =
@@ -7004,18 +6994,28 @@ function App() {
             <div className="viewport-overlay">
               <aside
                 className="cable-info-window"
-                style={{ borderTopColor: selectedCableInfo.accent }}
                 aria-label="Selected cable information"
               >
-                <h2>{selectedCableInfo.heading}</h2>
-                <dl>
-                  {selectedCableInfo.rows.map((row) => (
-                    <div key={row.label}>
-                      <dt>{row.label}</dt>
-                      <dd>{row.value}</dd>
-                    </div>
-                  ))}
-                </dl>
+                <div className="cable-info-title">
+                  <span
+                    className="cable-info-swatch"
+                    style={{
+                      background: `linear-gradient(90deg, ${selectedCableInfo.colorStart}, ${selectedCableInfo.colorEnd})`,
+                    }}
+                    aria-hidden="true"
+                  />
+                  <h2>{selectedCableInfo.heading}</h2>
+                </div>
+                {selectedCableInfo.rows.length > 0 && (
+                  <dl>
+                    {selectedCableInfo.rows.map((row) => (
+                      <div key={row.label}>
+                        <dt>{row.label}</dt>
+                        <dd>{row.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
               </aside>
             </div>
           )}
