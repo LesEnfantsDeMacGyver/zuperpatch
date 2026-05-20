@@ -312,6 +312,10 @@ h2 {
   grid-template-columns: 1fr 1fr;
 }
 
+.color-segmented {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .compact-segmented button {
   min-height: 34px;
 }
@@ -946,23 +950,6 @@ h2 {
 
 .route-node-hit:active {
   cursor: grabbing;
-}
-
-.cable-label-path {
-  fill: none;
-  pointer-events: none;
-  stroke: none;
-}
-
-.cable-path-label {
-  fill: var(--color-text);
-  font-size: 12px;
-  font-weight: 800;
-  paint-order: stroke;
-  pointer-events: none;
-  stroke: var(--color-label-outline);
-  stroke-linejoin: round;
-  stroke-width: 4px;
 }
 
 .route-label rect {

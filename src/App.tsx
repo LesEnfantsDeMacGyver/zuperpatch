@@ -49,7 +49,7 @@ type LabelPosition = "top" | "right" | "bottom" | "left";
 type Mode = "select" | "scale" | "measure" | "cable" | "device";
 type ConsumerSourceMode = "auto" | "manual";
 type ConsumerSourceType = "producer" | "powerstrip" | "powerCable";
-type ElectricalColorMode = "length" | "load";
+type CableColorMode = "length" | "load" | "type";
 
 type CableRoute = {
   id: string;
@@ -292,7 +292,7 @@ type PersistedProject = {
   zoom: number;
   floorPlanOpacity: number;
   animateOrphans: boolean;
-  electricalColorMode: ElectricalColorMode;
+  cableColorMode: CableColorMode;
   mode: Mode;
   activeCable: CableType;
   activeDevice: DeviceType;
@@ -1405,23 +1405,6 @@ function scalePathData(pathData: string, scale: number) {
   return pathData.replace(/-?\d+(?:\.\d+)?/g, (value) => `${Number(value) * scale}`);
 }
 
-function labelPathPoints(points: Point[]) {
-  if (points.length < 2) return points;
-  const longestSegment = points.slice(1).reduce(
-    (longest, point, index) => {
-      const start = points[index];
-      const segmentLength = distance(start, point);
-      return segmentLength > longest.length
-        ? { length: segmentLength, points: [start, point] }
-        : longest;
-    },
-    { length: 0, points: [points[0], points[1]] },
-  );
-  const [start, end] = longestSegment.points;
-  const shouldReverse = start.x > end.x || (start.x === end.x && start.y > end.y);
-  return shouldReverse ? [end, start] : [start, end];
-}
-
 function lengthLabel(meters: number) {
   return `${unit.format(meters)} m`;
 }
@@ -2316,8 +2299,7 @@ function App() {
   const [zoom, setZoom] = useState(1.1);
   const [floorPlanOpacity, setFloorPlanOpacity] = useState(1);
   const [animateOrphans, setAnimateOrphans] = useState(true);
-  const [electricalColorMode, setElectricalColorMode] =
-    useState<ElectricalColorMode>("length");
+  const [cableColorMode, setCableColorMode] = useState<CableColorMode>("length");
   const [rendering, setRendering] = useState(false);
   const [mode, setMode] = useState<Mode>("scale");
   const [activeCable, setActiveCable] = useState<CableType>("ethernet");
@@ -2409,7 +2391,7 @@ function App() {
         setZoom(project.zoom || 1.1);
         setFloorPlanOpacity(project.floorPlanOpacity ?? 1);
         setAnimateOrphans(project.animateOrphans ?? true);
-        setElectricalColorMode(project.electricalColorMode ?? "length");
+        setCableColorMode(project.cableColorMode ?? "length");
         setMode(project.mode || "scale");
         setActiveCable(project.activeCable || "ethernet");
         setActiveDevice(project.activeDevice || "powerstrip");
@@ -2462,7 +2444,7 @@ function App() {
       zoom,
       floorPlanOpacity,
       animateOrphans,
-      electricalColorMode,
+      cableColorMode,
       mode,
       activeCable,
       activeDevice,
@@ -2493,7 +2475,7 @@ function App() {
     cables,
     calibration,
     devices,
-    electricalColorMode,
+    cableColorMode,
     floorPlanOpacity,
     hydrated,
     knownDistance,
@@ -3578,7 +3560,7 @@ function App() {
   };
   const cableColorPathForRoute = (route: CableRoute): CableColorPath | undefined => {
     if (route.type !== "power") return undefined;
-    if (electricalColorMode === "load") {
+    if (cableColorMode === "load") {
       return {
         loadRatio: electricalRouteLoadRatios.get(route.id) ?? 0,
         offsetPx: 0,
@@ -4467,7 +4449,7 @@ function App() {
     setZoom(project.zoom || 1.1);
     setFloorPlanOpacity(project.floorPlanOpacity ?? 1);
     setAnimateOrphans(project.animateOrphans ?? true);
-    setElectricalColorMode(project.electricalColorMode ?? "length");
+    setCableColorMode(project.cableColorMode ?? "length");
     setMode(project.mode || "scale");
     setActiveCable(project.activeCable || "ethernet");
     setActiveDevice(project.activeDevice || "powerstrip");
@@ -4510,7 +4492,7 @@ function App() {
       zoom,
       floorPlanOpacity,
       animateOrphans,
-      electricalColorMode,
+      cableColorMode,
       mode,
       activeCable,
       activeDevice,
@@ -4580,7 +4562,7 @@ function App() {
     setZoom(project.zoom || 1.1);
     setFloorPlanOpacity(project.floorPlanOpacity ?? 1);
     setAnimateOrphans(project.animateOrphans ?? true);
-    setElectricalColorMode(project.electricalColorMode ?? "length");
+    setCableColorMode(project.cableColorMode ?? "length");
     setMode(project.mode || "scale");
     setActiveCable(project.activeCable || "ethernet");
     setActiveDevice(project.activeDevice || "powerstrip");
@@ -4647,7 +4629,7 @@ function App() {
       zoom,
       floorPlanOpacity,
       animateOrphans,
-      electricalColorMode,
+      cableColorMode,
       mode,
       activeCable,
       activeDevice,
@@ -4697,7 +4679,7 @@ function App() {
     cables,
     calibration,
     devices,
-    electricalColorMode,
+    cableColorMode,
     floorPlanOpacity,
     hydrated,
     knownDistance,
@@ -6218,8 +6200,6 @@ function App() {
     setMode("select");
   }
 
-  const draftMeters =
-    draftRoute.length > 1 && pixelsPerMeter ? routePixels(draftRoute) / pixelsPerMeter : 0;
   const visibleMeasurements = [
     ...measurements,
     ...(measurementDraft ? [measurementDraft] : []),
@@ -7126,25 +7106,32 @@ function App() {
         <section className="tool-group view-controls" aria-label="View controls">
           <h2>View</h2>
           <div className="field">
-            <span>Electrical color</span>
+            <span>Cable color</span>
             <div
-              className="compact-segmented connected-segmented"
+              className="compact-segmented connected-segmented color-segmented"
               role="group"
-              aria-label="Electrical color mode"
+              aria-label="Cable color mode"
             >
               <button
-                className={electricalColorMode === "length" ? "active" : ""}
+                className={cableColorMode === "length" ? "active" : ""}
                 type="button"
-                onClick={() => setElectricalColorMode("length")}
+                onClick={() => setCableColorMode("length")}
               >
                 Length
               </button>
               <button
-                className={electricalColorMode === "load" ? "active" : ""}
+                className={cableColorMode === "load" ? "active" : ""}
                 type="button"
-                onClick={() => setElectricalColorMode("load")}
+                onClick={() => setCableColorMode("load")}
               >
                 Load
+              </button>
+              <button
+                className={cableColorMode === "type" ? "active" : ""}
+                type="button"
+                onClick={() => setCableColorMode("type")}
+              >
+                Type
               </button>
             </div>
           </div>
@@ -7393,8 +7380,6 @@ function App() {
                     selectedCableIds.length > 0 && !selectedCableIds.includes(route.id),
                   )}
                   key={route.id}
-                  labelPathId={`cable-label-${route.id}`}
-                  meters={pixelsPerMeter ? routeMaterialPixels(route) / pixelsPerMeter : 0}
                   routeId={route.id}
                   onSelect={(event) => {
                     if (mode === "cable") return;
@@ -7443,6 +7428,7 @@ function App() {
                       : undefined
                   }
                   branches={scaleBranches(route.branches, viewScale)}
+                  cableColorMode={cableColorMode}
                   colorPath={cableColorPathForRoute(route)}
                   conduitSegments={conduitSegmentLanes}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
@@ -7472,8 +7458,7 @@ function App() {
                   active
                   config={cableTypes[activeCable]}
                   draft
-                  labelPathId="cable-label-draft"
-                  meters={draftMeters}
+                  cableColorMode={cableColorMode}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
                   points={toDisplayPoints(draftRoute)}
                   routeId="draft"
@@ -7513,17 +7498,25 @@ function App() {
                     ? (upstreamPixels + arcPixels) / maxLengthPx
                     : 0;
                   const startRatio =
-                    electricalColorMode === "load"
+                    cableColorMode === "load"
                       ? loadRatio
                       : consumerLengthRatio;
                   const endRatio =
-                    electricalColorMode === "load"
+                    cableColorMode === "load"
                       ? loadRatio
                       : sourceLengthRatio;
+                  const startColor =
+                    cableColorMode === "type"
+                      ? cableTypes.power.colorStart
+                      : colorAtRatio(startRatio);
+                  const endColor =
+                    cableColorMode === "type"
+                      ? cableTypes.power.colorStart
+                      : colorAtRatio(endRatio);
                   return (
                     <AutoSourceLink
                       end={end}
-                      endRatio={endRatio}
+                      endColor={endColor}
                       flowing={selectedAutoSourceFlowIds.has(linkId)}
                       id={linkId}
                       key={linkId}
@@ -7533,7 +7526,7 @@ function App() {
                           : sourceArcPathThroughControl(start, control, end)
                       }
                       start={start}
-                      startRatio={startRatio}
+                      startColor={startColor}
                     />
                   );
                 })}
@@ -7985,20 +7978,20 @@ function CableRouteEditPointLayer({
 
 function AutoSourceLink({
   end,
-  endRatio,
+  endColor,
   flowing = false,
   id,
   pathData,
   start,
-  startRatio,
+  startColor,
 }: {
   end: Point;
-  endRatio: number;
+  endColor: string;
   flowing?: boolean;
   id: string;
   pathData: string;
   start: Point;
-  startRatio: number;
+  startColor: string;
 }) {
   const gradientId = `auto-source-${id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   return (
@@ -8012,8 +8005,8 @@ function AutoSourceLink({
           y1={start.y}
           y2={end.y}
         >
-          <stop offset="0%" stopColor={colorAtRatio(startRatio)} />
-          <stop offset="100%" stopColor={colorAtRatio(endRatio)} />
+          <stop offset="0%" stopColor={startColor} />
+          <stop offset="100%" stopColor={endColor} />
         </linearGradient>
       </defs>
       <path
@@ -8038,14 +8031,13 @@ function AutoSourceLink({
 function CableRouteView({
   active = false,
   branches = [],
+  cableColorMode,
   colorPath,
   config,
   conduitSegments,
   dimmed = false,
   displayPixelsPerMeter,
   draft = false,
-  labelPathId,
-  meters,
   routeId,
   onSelect,
   onConduitSegmentClick,
@@ -8058,14 +8050,13 @@ function CableRouteView({
 }: {
   active?: boolean;
   branches?: CableBranch[];
+  cableColorMode: CableColorMode;
   colorPath?: CableColorPath;
   config: CableConfig;
   conduitSegments?: Map<string, ConduitSegmentLane>;
   dimmed?: boolean;
   displayPixelsPerMeter: number;
   draft?: boolean;
-  labelPathId: string;
-  meters: number;
   routeId: string;
   onSelect?: PointerEventHandler<SVGGElement>;
   onConduitSegmentClick?: MouseEventHandler<SVGLineElement>;
@@ -8077,11 +8068,11 @@ function CableRouteView({
   selectedPointIndex?: number;
 }) {
   let travelled = 0;
-  const cableLabel = `${config.label} ${lengthLabel(meters)}`;
-  const labelPath = routePathData(labelPathPoints(points));
   const maxLengthPx = displayPixelsPerMeter * config.maxLengthM;
   const ratioForPixels = (pixels: number) => (maxLengthPx ? pixels / maxLengthPx : 0);
   const colorRatioForPixels = (pixels: number) => colorPath?.loadRatio ?? ratioForPixels(pixels);
+  const segmentColor = (ratio: number) =>
+    cableColorMode === "type" ? config.colorStart : colorAtRatio(ratio);
   const trunkPixels = routePixels(points);
   const sourcePointIndex = colorPath?.sourcePointIndex ?? 0;
   const sourceTrunkPixels =
@@ -8110,9 +8101,6 @@ function CableRouteView({
         .join(" ")}
       onPointerDown={onSelect}
     >
-      {meters > 0 && labelPath && (
-        <path className="cable-label-path" d={labelPath} id={labelPathId} />
-      )}
       {points.slice(1).map((point, index) => {
         const start = points[index];
         const pointIndex = index + 1;
@@ -8139,8 +8127,8 @@ function CableRouteView({
                 y1={displayStart.y}
                 y2={displayEnd.y}
               >
-                <stop offset="0%" stopColor={colorAtRatio(startRatio)} />
-                <stop offset="100%" stopColor={colorAtRatio(endRatio)} />
+                <stop offset="0%" stopColor={segmentColor(startRatio)} />
+                <stop offset="100%" stopColor={segmentColor(endRatio)} />
               </linearGradient>
             </defs>
             <line
@@ -8207,8 +8195,8 @@ function CableRouteView({
                     y1={start.y}
                     y2={point.y}
                   >
-                    <stop offset="0%" stopColor={colorAtRatio(colorRatioForPixels(branchColorDistance(branchTravelled)))} />
-                    <stop offset="100%" stopColor={colorAtRatio(colorRatioForPixels(branchColorDistance(branchTravelled + segmentLength)))} />
+                    <stop offset="0%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled)))} />
+                    <stop offset="100%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branchTravelled + segmentLength)))} />
                   </linearGradient>
                 </defs>
                 <line
@@ -8278,13 +8266,6 @@ function CableRouteView({
             />
           </g>
         )),
-      )}
-      {meters > 0 && (
-        <text className="cable-path-label" dy="-10" textAnchor="middle">
-          <textPath href={`#${labelPathId}`} startOffset="50%">
-            {cableLabel}
-          </textPath>
-        </text>
       )}
     </g>
   );
