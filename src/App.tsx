@@ -187,6 +187,14 @@ type ScalingSelection = {
   maxScale: number;
   pointerId: number;
 };
+type DraggingConduitSegment = {
+  initialEndPoint: Point;
+  initialStartPoint: Point;
+  pointIndex: number;
+  pointerId: number;
+  routeId: string;
+  startPointer: Point;
+};
 type RouteEndpointReference = ReturnType<typeof routeEndpointReferences>[number];
 
 type FlowPath = {
@@ -223,6 +231,29 @@ type CableColorPath = {
   offsetPx: number;
   sourceBranchId?: string;
   sourcePointIndex?: number;
+};
+
+type ConduitSegmentLane = {
+  draggable: boolean;
+  laneCount: number;
+  laneIndex: number;
+  normal: Point;
+  offsetPx: number;
+};
+
+type ConduitCandidateSegment = {
+  direction: Point;
+  draggable: boolean;
+  end: Point;
+  key: string;
+  length: number;
+  maxProjection: number;
+  minProjection: number;
+  normal: Point;
+  perpendicular: number;
+  pointIndex: number;
+  routeId: string;
+  start: Point;
 };
 
 type CableConfig = {
@@ -280,6 +311,9 @@ const zoomStep = 0.2;
 const maxUndoHistory = 160;
 const flowDashCyclePx = 52;
 const cablePointSnapRadiusPx = 11;
+const renderedCableWidthPx = 7;
+const conduitLaneStrokePx = 2;
+const conduitLaneGapPx = 2;
 const defaultPowerSourceSockets = 4;
 const defaultEthernetSwitchSockets = 8;
 const desiredFreeSocketLoadW = 30;
@@ -381,6 +415,34 @@ function distance(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function dotPoints(a: Point, b: Point) {
+  return a.x * b.x + a.y * b.y;
+}
+
+function normalizedSegment(start: Point, end: Point) {
+  const length = distance(start, end);
+  if (!length) return undefined;
+  let direction = {
+    x: (end.x - start.x) / length,
+    y: (end.y - start.y) / length,
+  };
+  if (direction.x < 0 || (Math.abs(direction.x) < 0.0001 && direction.y < 0)) {
+    direction = { x: -direction.x, y: -direction.y };
+  }
+  return {
+    direction,
+    length,
+    normal: { x: -direction.y, y: direction.x },
+  };
+}
+
+function offsetPoint(point: Point, normal: Point, offset: number) {
+  return {
+    x: point.x + normal.x * offset,
+    y: point.y + normal.y * offset,
+  };
+}
+
 function clampPoint(point: Point, bounds: { width: number; height: number }) {
   return {
     x: Math.min(Math.max(point.x, 0), bounds.width),
@@ -443,6 +505,109 @@ function routePoints(route: CableRoute) {
     ...route.points,
     ...(route.branches?.flatMap((branch) => branch.points) ?? []),
   ];
+}
+
+function conduitSegmentKey(routeId: string, pointIndex: number) {
+  return `${routeId}:trunk:${pointIndex}`;
+}
+
+function conduitSegmentCandidates(routes: CableRoute[]) {
+  return routes.flatMap((route) => {
+    const lastPointIndex = route.points.length - 1;
+    return route.points.slice(1).flatMap((point, index) => {
+      const pointIndex = index + 1;
+      const start = route.points[index];
+      const geometry = normalizedSegment(start, point);
+      if (!geometry || geometry.length < 12) return [];
+      const startProjection = dotPoints(start, geometry.direction);
+      const endProjection = dotPoints(point, geometry.direction);
+      return [{
+        direction: geometry.direction,
+        draggable: pointIndex > 1 && pointIndex < lastPointIndex,
+        end: point,
+        key: conduitSegmentKey(route.id, pointIndex),
+        length: geometry.length,
+        maxProjection: Math.max(startProjection, endProjection),
+        minProjection: Math.min(startProjection, endProjection),
+        normal: geometry.normal,
+        perpendicular:
+          (dotPoints(start, geometry.normal) + dotPoints(point, geometry.normal)) / 2,
+        pointIndex,
+        routeId: route.id,
+        start,
+      }];
+    });
+  });
+}
+
+function conduitSegmentsTouch(
+  first: ConduitCandidateSegment,
+  second: ConduitCandidateSegment,
+) {
+  if (first.routeId === second.routeId) return false;
+  if (Math.abs(dotPoints(first.direction, second.direction)) < Math.cos(Math.PI / 12)) {
+    return false;
+  }
+
+  const overlap =
+    Math.min(first.maxProjection, second.maxProjection) -
+    Math.max(first.minProjection, second.minProjection);
+  if (overlap < Math.min(24, Math.min(first.length, second.length) * 0.4)) {
+    return false;
+  }
+
+  return Math.abs(first.perpendicular - second.perpendicular) <= renderedCableWidthPx;
+}
+
+function buildConduitSegmentLanes(routes: CableRoute[]) {
+  const segments = conduitSegmentCandidates(routes);
+  const parents = segments.map((_, index) => index);
+  const find = (index: number): number => {
+    const parent = parents[index];
+    if (parent === index) return index;
+    const root = find(parent);
+    parents[index] = root;
+    return root;
+  };
+  const join = (first: number, second: number) => {
+    const firstRoot = find(first);
+    const secondRoot = find(second);
+    if (firstRoot !== secondRoot) parents[secondRoot] = firstRoot;
+  };
+
+  segments.forEach((segment, index) => {
+    segments.slice(index + 1).forEach((candidate, offset) => {
+      if (conduitSegmentsTouch(segment, candidate)) {
+        join(index, index + 1 + offset);
+      }
+    });
+  });
+
+  const groups = new Map<number, ConduitCandidateSegment[]>();
+  segments.forEach((segment, index) => {
+    const root = find(index);
+    groups.set(root, [...(groups.get(root) ?? []), segment]);
+  });
+
+  const lanes = new Map<string, ConduitSegmentLane>();
+  groups.forEach((group) => {
+    if (group.length < 2) return;
+    const routeLanes = [...new Set(group.map((segment) => segment.routeId))].sort();
+    if (routeLanes.length < 2) return;
+    const laneSpacing = conduitLaneStrokePx + conduitLaneGapPx;
+    group.forEach((segment) => {
+      const laneIndex = routeLanes.indexOf(segment.routeId);
+      lanes.set(segment.key, {
+        draggable: segment.draggable,
+        laneCount: routeLanes.length,
+        laneIndex,
+        normal: segment.normal,
+        offsetPx: (laneIndex - (routeLanes.length - 1) / 2) * laneSpacing,
+      });
+    });
+  });
+
+  return lanes;
 }
 
 function routeBounds(route: CableRoute) {
@@ -2165,6 +2330,8 @@ function App() {
   const [draggingSelection, setDraggingSelection] = useState<DraggingSelection | null>(null);
   const [scalingSelection, setScalingSelection] = useState<ScalingSelection | null>(null);
   const [rotatingSelection, setRotatingSelection] = useState<RotatingSelection | null>(null);
+  const [draggingConduitSegment, setDraggingConduitSegment] =
+    useState<DraggingConduitSegment | null>(null);
   const [selectedCablePoint, setSelectedCablePoint] = useState<SelectedCablePoint | null>(null);
   const [continuingCablePoint, setContinuingCablePoint] = useState<ContinuingCablePoint | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2510,6 +2677,7 @@ function App() {
       }
       if (event.key === "Escape") {
         clearRouteDraft();
+        setDraggingConduitSegment(null);
         setScaleDraft(null);
         setMeasurements([]);
         setMeasurementDraft(null);
@@ -2600,6 +2768,17 @@ function App() {
   const visiblePlanCables = hoveredPlanCableType
     ? currentCables.filter((route) => route.type === hoveredPlanCableType)
     : currentCables;
+  const conduitSegmentLanes = useMemo(
+    () =>
+      buildConduitSegmentLanes(
+        visiblePlanCables.map((route) => ({
+          ...route,
+          points: scalePoints(route.points, viewScale),
+          branches: scaleBranches(route.branches, viewScale),
+        })),
+      ),
+    [viewScale, visiblePlanCables],
+  );
   const currentDevices = devices.filter((device) => device.page === pageNumber);
   const selectedDevices = selectedDeviceIds
     .map((deviceId) => devices.find((device) => device.id === deviceId))
@@ -4259,6 +4438,7 @@ function App() {
     setSelectedId(null);
     setSelectedDeviceIds([]);
     setSelectedCableIds([]);
+    setDraggingConduitSegment(null);
     setContinuingCablePoint(null);
     setStorageNotice("");
     queueViewPositionRestore(defaultViewPosition);
@@ -4292,6 +4472,7 @@ function App() {
     setSelectedId(null);
     setSelectedDeviceIds([]);
     setSelectedCableIds([]);
+    setDraggingConduitSegment(null);
     setContinuingCablePoint(null);
     queueViewPositionRestore(project.viewPosition);
 
@@ -4406,6 +4587,7 @@ function App() {
     setDraggingSelection(null);
     setScalingSelection(null);
     setRotatingSelection(null);
+    setDraggingConduitSegment(null);
     setContinuingCablePoint(null);
     setSelectedId(snapshot.selectedId);
     setSelectedDeviceIds(
@@ -5144,6 +5326,35 @@ function App() {
       setSelectionRect({ ...selectionRect, end: pointerFromEvent(event, false) });
       return;
     }
+    if (draggingConduitSegment) {
+      if (draggingConduitSegment.pointerId !== event.pointerId) return;
+      const editPoint = pointerFromEvent(event, false);
+      const delta = {
+        x: editPoint.x - draggingConduitSegment.startPointer.x,
+        y: editPoint.y - draggingConduitSegment.startPointer.y,
+      };
+      setCables((current) =>
+        current.map((route) => {
+          if (route.id !== draggingConduitSegment.routeId) return route;
+          return routeWithCablePoint(
+            routeWithCablePoint(
+              route,
+              {
+                pointIndex: draggingConduitSegment.pointIndex - 1,
+                routeId: draggingConduitSegment.routeId,
+              },
+              translatePoint(draggingConduitSegment.initialStartPoint, delta),
+            ),
+            {
+              pointIndex: draggingConduitSegment.pointIndex,
+              routeId: draggingConduitSegment.routeId,
+            },
+            translatePoint(draggingConduitSegment.initialEndPoint, delta),
+          );
+        }),
+      );
+      return;
+    }
     if (draggingCablePoint) {
       const editPoint = pointerFromEvent(event, false);
       const shouldConstrain = event.shiftKey || isShiftPressed;
@@ -5349,6 +5560,9 @@ function App() {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
+    }
+    if (draggingConduitSegment && draggingConduitSegment.pointerId === event.pointerId) {
+      setDraggingConduitSegment(null);
     }
     finishUndoGroup();
     if (measurementDraft) {
@@ -6086,6 +6300,28 @@ function App() {
         ),
       );
     }
+  }
+
+  function beginConduitSegmentDrag(routeId: string, event: PointerEvent<SVGLineElement>) {
+    if (mode !== "select") return;
+    const pointIndex = Number(event.currentTarget.dataset.pointIndex);
+    const route = currentCables.find((currentRoute) => currentRoute.id === routeId);
+    if (!route || pointIndex <= 1 || pointIndex >= route.points.length - 1) return;
+
+    event.stopPropagation();
+    beginUndoGroup();
+    setSelectedId(routeId);
+    setSelectedDeviceIds([]);
+    setSelectedCableIds([routeId]);
+    setSelectedCablePoint(null);
+    setDraggingConduitSegment({
+      initialEndPoint: clonePoint(route.points[pointIndex]),
+      initialStartPoint: clonePoint(route.points[pointIndex - 1]),
+      pointIndex,
+      pointerId: event.pointerId,
+      routeId,
+      startPointer: pointerFromEvent(event, false),
+    });
   }
 
   return (
@@ -7114,6 +7350,7 @@ function App() {
                   key={route.id}
                   labelPathId={`cable-label-${route.id}`}
                   meters={pixelsPerMeter ? routeMaterialPixels(route) / pixelsPerMeter : 0}
+                  routeId={route.id}
                   onSelect={(event) => {
                     if (mode === "cable") return;
                     if (event.altKey) {
@@ -7146,8 +7383,16 @@ function App() {
                           beginCablePointDrag(route.id, event);
                         }
                   }
+                  onConduitSegmentPointerDown={
+                    mode === "select"
+                      ? (event) => {
+                          beginConduitSegmentDrag(route.id, event);
+                        }
+                      : undefined
+                  }
                   branches={scaleBranches(route.branches, viewScale)}
                   colorPath={cableColorPathForRoute(route)}
+                  conduitSegments={conduitSegmentLanes}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
                   interactiveBranchPointKeys={
                     mode === "cable"
@@ -7179,6 +7424,7 @@ function App() {
                   meters={draftMeters}
                   displayPixelsPerMeter={pixelsPerMeter ? pixelsPerMeter * viewScale : 0}
                   points={toDisplayPoints(draftRoute)}
+                  routeId="draft"
                 />
               )}
 
@@ -7742,12 +7988,15 @@ function CableRouteView({
   branches = [],
   colorPath,
   config,
+  conduitSegments,
   dimmed = false,
   displayPixelsPerMeter,
   draft = false,
   labelPathId,
   meters,
+  routeId,
   onSelect,
+  onConduitSegmentPointerDown,
   onPointPointerDown,
   interactiveBranchPointKeys,
   interactivePointIndices,
@@ -7758,12 +8007,15 @@ function CableRouteView({
   branches?: CableBranch[];
   colorPath?: CableColorPath;
   config: CableConfig;
+  conduitSegments?: Map<string, ConduitSegmentLane>;
   dimmed?: boolean;
   displayPixelsPerMeter: number;
   draft?: boolean;
   labelPathId: string;
   meters: number;
+  routeId: string;
   onSelect?: PointerEventHandler<SVGGElement>;
+  onConduitSegmentPointerDown?: PointerEventHandler<SVGLineElement>;
   onPointPointerDown?: PointerEventHandler<SVGCircleElement>;
   interactiveBranchPointKeys?: Set<string>;
   interactivePointIndices?: Set<number>;
@@ -7809,34 +8061,59 @@ function CableRouteView({
       )}
       {points.slice(1).map((point, index) => {
         const start = points[index];
+        const pointIndex = index + 1;
+        const conduitLane = conduitSegments?.get(conduitSegmentKey(routeId, pointIndex));
+        const displayStart = conduitLane
+          ? offsetPoint(start, conduitLane.normal, conduitLane.offsetPx)
+          : start;
+        const displayEnd = conduitLane
+          ? offsetPoint(point, conduitLane.normal, conduitLane.offsetPx)
+          : point;
         const segmentLength = distance(start, point);
         const startRatio = colorRatioForPixels(colorDistanceForTrunkPixels(travelled));
         travelled += segmentLength;
         const endRatio = colorRatioForPixels(colorDistanceForTrunkPixels(travelled));
-        const gradientId = `${config.id}-${start.x}-${start.y}-${point.x}-${point.y}-${draft ? "draft" : "route"}`;
+        const gradientId = `${config.id}-${start.x}-${start.y}-${point.x}-${point.y}-${draft ? "draft" : "route"}-${conduitLane?.laneIndex ?? "single"}`;
         return (
           <g key={`${point.x}-${point.y}-${index}`}>
             <defs>
               <linearGradient
                 gradientUnits="userSpaceOnUse"
                 id={gradientId}
-                x1={start.x}
-                x2={point.x}
-                y1={start.y}
-                y2={point.y}
+                x1={displayStart.x}
+                x2={displayEnd.x}
+                y1={displayStart.y}
+                y2={displayEnd.y}
               >
                 <stop offset="0%" stopColor={colorAtRatio(startRatio)} />
                 <stop offset="100%" stopColor={colorAtRatio(endRatio)} />
               </linearGradient>
             </defs>
             <line
-              className={draft ? "draft-line" : ""}
-              x1={start.x}
-              x2={point.x}
-              y1={start.y}
-              y2={point.y}
+              className={[
+                draft ? "draft-line" : "",
+                conduitLane ? "conduit-line" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              data-conduit-count={conduitLane?.laneCount}
+              x1={displayStart.x}
+              x2={displayEnd.x}
+              y1={displayStart.y}
+              y2={displayEnd.y}
               style={{ stroke: `url(#${gradientId})` }}
             />
+            {conduitLane?.draggable && onConduitSegmentPointerDown && (
+              <line
+                className="conduit-segment-hit"
+                data-point-index={pointIndex}
+                onPointerDown={onConduitSegmentPointerDown}
+                x1={displayStart.x}
+                x2={displayEnd.x}
+                y1={displayStart.y}
+                y2={displayEnd.y}
+              />
+            )}
           </g>
         );
       })}

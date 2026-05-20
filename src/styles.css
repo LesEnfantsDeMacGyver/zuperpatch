@@ -803,6 +803,24 @@ h2 {
   stroke-width: 9;
 }
 
+.cable-route line.conduit-line,
+.cable-route.active line.conduit-line {
+  stroke-width: 2;
+}
+
+.conduit-segment-hit {
+  cursor: grab;
+  opacity: 0;
+  pointer-events: stroke;
+  stroke: #000;
+  stroke-linecap: round;
+  stroke-width: 14;
+}
+
+.conduit-segment-hit:active {
+  cursor: grabbing;
+}
+
 .draft-line {
   stroke-dasharray: 11 7;
 }
