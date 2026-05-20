@@ -5,7 +5,6 @@ import {
   EthernetPort,
   FileUp,
   Gauge,
-  GitBranch,
   Minus,
   MousePointer2,
   PencilRuler,
@@ -56,19 +55,12 @@ type CableRoute = {
   type: CableType;
   page: number;
   points: Point[];
-  branches?: CableBranch[];
   endpointDeviceIds?: CableEndpointDeviceIds;
-};
-
-type CableBranch = {
-  id: string;
-  points: Point[];
 };
 
 type CableEndpointDeviceIds = {
   start?: string;
   end?: string;
-  branches?: Record<string, string | undefined>;
 };
 
 type Device = {
@@ -116,8 +108,6 @@ type DeviceCableAttachment = {
 type AttachedCablePoint = {
   routeId: string;
   pointIndex?: number;
-  branchId?: string;
-  branchPointIndex?: number;
   startPoint: Point;
 };
 
@@ -130,8 +120,6 @@ type DraggingDevice = {
 type DraggingCablePoint = {
   routeId: string;
   pointIndex?: number;
-  branchId?: string;
-  branchPointIndex?: number;
   detachedDeviceId?: string;
 };
 
@@ -234,16 +222,12 @@ type AutoSourceLinkRoute = {
 };
 
 type CableColorPath = {
-  branchLoadRatios?: Record<string, number>;
   loadRatio?: number;
   offsetPx: number;
-  sourceBranchId?: string;
   sourcePointIndex?: number;
 };
 
 type ElectricalRouteLoadPath = {
-  branchLoadRatios: Record<string, number>;
-  branchLoadWatts: Record<string, number>;
   loadRatio: number;
   loadWatts: number;
 };
@@ -274,8 +258,6 @@ type ConduitCandidateSegment = {
 
 type LooseCableEndpointPulse = {
   angle: number;
-  branchId?: string;
-  branchPointIndex?: number;
   point: Point;
   pointIndex?: number;
 };
@@ -540,10 +522,7 @@ function selectionCenter(bounds: SelectionBounds): Point {
 }
 
 function routePoints(route: CableRoute) {
-  return [
-    ...route.points,
-    ...(route.branches?.flatMap((branch) => branch.points) ?? []),
-  ];
+  return route.points;
 }
 
 function conduitSegmentKey(routeId: string, pointIndex: number) {
@@ -768,10 +747,6 @@ function rotateRoute(route: CableRoute, center: Point, angleRadians: number): Ca
   return {
     ...route,
     points: route.points.map((point) => rotatePointAround(point, center, angleRadians)),
-    branches: route.branches?.map((branch) => ({
-      ...branch,
-      points: branch.points.map((point) => rotatePointAround(point, center, angleRadians)),
-    })),
   };
 }
 
@@ -786,10 +761,6 @@ function scaleRoute(route: CableRoute, center: Point, scale: number): CableRoute
   return {
     ...route,
     points: route.points.map((point) => scalePointAround(point, center, scale)),
-    branches: route.branches?.map((branch) => ({
-      ...branch,
-      points: branch.points.map((point) => scalePointAround(point, center, scale)),
-    })),
   };
 }
 
@@ -804,10 +775,6 @@ function translateRoute(route: CableRoute, delta: Point): CableRoute {
   return {
     ...route,
     points: route.points.map((point) => translatePoint(point, delta)),
-    branches: route.branches?.map((branch) => ({
-      ...branch,
-      points: branch.points.map((point) => translatePoint(point, delta)),
-    })),
   };
 }
 
@@ -950,25 +917,10 @@ function nextOption<T extends string>(options: T[], current: T) {
 function routeEndpointReferences(route: CableRoute) {
   if (route.points.length === 0) return [];
   const endpoints: Array<{
-    branchId?: string;
-    branchPointIndex?: number;
     deviceId?: string;
     point: Point;
     pointIndex?: number;
   }> = [{ deviceId: route.endpointDeviceIds?.start, point: route.points[0], pointIndex: 0 }];
-  const branches = route.branches ?? [];
-  if (branches.length > 0) {
-    branches.forEach((branch) => {
-      if (branch.points.length === 0) return;
-      endpoints.push({
-        branchId: branch.id,
-        branchPointIndex: branch.points.length - 1,
-        deviceId: route.endpointDeviceIds?.branches?.[branch.id],
-        point: branch.points[branch.points.length - 1],
-      });
-    });
-    return endpoints;
-  }
   endpoints.push({
     deviceId: route.endpointDeviceIds?.end,
     point: route.points[route.points.length - 1],
@@ -981,9 +933,7 @@ function isInternalCableJunctionEndpoint(
   route: CableRoute,
   endpoint: RouteEndpointReference,
 ) {
-  const branches = route.branches ?? [];
-  const internalTrunkPoints =
-    branches.length > 0 ? route.points.slice(1) : route.points.slice(1, -1);
+  const internalTrunkPoints = route.points.slice(1, -1);
   return internalTrunkPoints.some((point) => samePoint(point, endpoint.point));
 }
 
@@ -999,24 +949,16 @@ function looseCableEndpointPulses(route: CableRoute, devicesById: Map<string, De
       return [];
     }
 
-    let adjacentPoint: Point | undefined;
-    if (endpoint.branchId !== undefined && endpoint.branchPointIndex !== undefined) {
-      const branch = route.branches?.find((candidate) => candidate.id === endpoint.branchId);
-      adjacentPoint =
-        endpoint.branchPointIndex > 0
-          ? branch?.points[endpoint.branchPointIndex - 1]
-          : route.points[route.points.length - 1];
-    } else if (endpoint.pointIndex === 0) {
-      adjacentPoint = route.points[1];
-    } else if (endpoint.pointIndex !== undefined) {
-      adjacentPoint = route.points[endpoint.pointIndex - 1];
-    }
+    const adjacentPoint =
+      endpoint.pointIndex === 0
+        ? route.points[1]
+        : endpoint.pointIndex !== undefined
+          ? route.points[endpoint.pointIndex - 1]
+          : undefined;
 
     if (!adjacentPoint) return [];
     return [{
       angle: Math.atan2(endpoint.point.y - adjacentPoint.y, endpoint.point.x - adjacentPoint.x),
-      branchId: endpoint.branchId,
-      branchPointIndex: endpoint.branchPointIndex,
       point: endpoint.point,
       pointIndex: endpoint.pointIndex,
     }];
@@ -1082,11 +1024,6 @@ function constrainEditedRoutePoint(points: Point[], pointIndex: number, target: 
 }
 
 function attachedPointSnapAnchor(route: CableRoute, attachment: AttachedCablePoint) {
-  if (attachment.branchId !== undefined && attachment.branchPointIndex !== undefined) {
-    const branch = route.branches?.find((currentBranch) => currentBranch.id === attachment.branchId);
-    if (!branch) return undefined;
-    return branch.points[attachment.branchPointIndex - 1] ?? route.points[route.points.length - 1];
-  }
   if (attachment.pointIndex === undefined) return undefined;
   return route.points[attachment.pointIndex - 1] ?? route.points[attachment.pointIndex + 1];
 }
@@ -1097,18 +1034,6 @@ function routeWithEndpointDeviceId(
   deviceId?: string,
 ) {
   const endpointDeviceIds = route.endpointDeviceIds ?? {};
-  if (point.branchId !== undefined) {
-    return {
-      ...route,
-      endpointDeviceIds: {
-        ...endpointDeviceIds,
-        branches: {
-          ...endpointDeviceIds.branches,
-          [point.branchId]: deviceId,
-        },
-      },
-    };
-  }
   if (point.pointIndex === 0) {
     return {
       ...route,
@@ -1133,30 +1058,17 @@ function routeWithEndpointDeviceId(
 function cablePointKey(point: DraggingCablePoint) {
   return [
     point.routeId,
-    point.branchId ?? "",
-    point.branchPointIndex ?? "",
     point.pointIndex ?? "",
   ].join(":");
 }
 
 function cablePointReferencesForRoute(route: CableRoute): CablePointReference[] {
-  return [
-    ...route.points.map((point, pointIndex) => ({
-      page: route.page,
-      point,
-      pointIndex,
-      routeId: route.id,
-    })),
-    ...(route.branches ?? []).flatMap((branch) =>
-      branch.points.map((point, branchPointIndex) => ({
-        branchId: branch.id,
-        branchPointIndex,
-        page: route.page,
-        point,
-        routeId: route.id,
-      })),
-    ),
-  ];
+  return route.points.map((point, pointIndex) => ({
+    page: route.page,
+    point,
+    pointIndex,
+    routeId: route.id,
+  }));
 }
 
 function cablePointReferencesForRoutes(routes: CableRoute[]) {
@@ -1164,43 +1076,15 @@ function cablePointReferencesForRoutes(routes: CableRoute[]) {
 }
 
 function cablePointForReference(route: CableRoute, reference: DraggingCablePoint) {
-  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
-    const branch = route.branches?.find(
-      (currentBranch) => currentBranch.id === reference.branchId,
-    );
-    return branch?.points[reference.branchPointIndex];
-  }
   return reference.pointIndex !== undefined ? route.points[reference.pointIndex] : undefined;
 }
 
 function isEndpointCablePoint(route: CableRoute, reference: DraggingCablePoint) {
-  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
-    const branch = route.branches?.find(
-      (currentBranch) => currentBranch.id === reference.branchId,
-    );
-    return Boolean(branch && reference.branchPointIndex === branch.points.length - 1);
-  }
   if (reference.pointIndex === undefined) return false;
-  if ((route.branches ?? []).length > 0) return reference.pointIndex === 0;
   return reference.pointIndex === 0 || reference.pointIndex === route.points.length - 1;
 }
 
 function routeWithCablePoint(route: CableRoute, reference: DraggingCablePoint, point: Point) {
-  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
-    return {
-      ...route,
-      branches: route.branches?.map((branch) =>
-        branch.id === reference.branchId
-          ? {
-              ...branch,
-              points: branch.points.map((branchPoint, index) =>
-                index === reference.branchPointIndex ? point : branchPoint,
-              ),
-            }
-          : branch,
-      ),
-    };
-  }
   if (reference.pointIndex === undefined) return route;
   return {
     ...route,
@@ -1215,19 +1099,6 @@ function routeWithExtendedEndpoint(
   reference: ContinuingCablePoint,
   point: Point,
 ) {
-  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
-    return {
-      ...route,
-      branches: route.branches?.map((branch) =>
-        branch.id === reference.branchId
-          ? {
-              ...branch,
-              points: [...branch.points, point],
-            }
-          : branch,
-      ),
-    };
-  }
   if (reference.pointIndex === 0) {
     return {
       ...route,
@@ -1265,25 +1136,10 @@ function closestCablePointSnap(
 }
 
 function adjacentCablePointsForReference(route: CableRoute, reference: DraggingCablePoint) {
-  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
-    const branch = route.branches?.find(
-      (currentBranch) => currentBranch.id === reference.branchId,
-    );
-    if (!branch) return [];
-    return [
-      reference.branchPointIndex === 0
-        ? route.points[route.points.length - 1]
-        : branch.points[reference.branchPointIndex - 1],
-      branch.points[reference.branchPointIndex + 1],
-    ].filter((point): point is Point => Boolean(point));
-  }
   if (reference.pointIndex === undefined) return [];
   return [
     route.points[reference.pointIndex - 1],
     route.points[reference.pointIndex + 1],
-    ...(reference.pointIndex === route.points.length - 1
-      ? (route.branches ?? []).map((branch) => branch.points[0])
-      : []),
   ].filter((point): point is Point => Boolean(point));
 }
 
@@ -1351,13 +1207,6 @@ function scalePoints(points: Point[], scale: number) {
   return points.map((point) => scalePoint(point, scale));
 }
 
-function scaleBranches(branches: CableBranch[] | undefined, scale: number) {
-  return (branches ?? []).map((branch) => ({
-    ...branch,
-    points: scalePoints(branch.points, scale),
-  }));
-}
-
 function routePixels(points: Point[]) {
   return points.reduce((sum, point, index) => {
     if (index === 0) return 0;
@@ -1365,16 +1214,8 @@ function routePixels(points: Point[]) {
   }, 0);
 }
 
-function branchPathPoints(route: CableRoute, branch: CableBranch) {
-  const splitPoint = route.points[route.points.length - 1];
-  return splitPoint ? [splitPoint, ...branch.points] : branch.points;
-}
-
 function routeCablePathPixels(route: CableRoute) {
-  const branches = route.branches ?? [];
-  if (branches.length === 0) return [routePixels(route.points)];
-  const trunkPixels = routePixels(route.points);
-  return branches.map((branch) => trunkPixels + routePixels(branchPathPoints(route, branch)));
+  return [routePixels(route.points)];
 }
 
 function routeMaterialPixels(route: CableRoute) {
@@ -1403,25 +1244,6 @@ function cableBomEntries(route: CableRoute, devices: Device[]) {
   const devicesById = new Map(devices.map((device) => [device.id, device]));
   const startEndpoint = routeEndpointReferences(route).find((endpoint) => endpoint.pointIndex === 0);
   const startLabel = routeEndpointLabel(startEndpoint, devicesById, "Cable start");
-  const branches = route.branches ?? [];
-  if (branches.length > 0) {
-    return branches.map((branch, index) => {
-      const endpoint = branch.points.length
-        ? {
-            branchId: branch.id,
-            branchPointIndex: branch.points.length - 1,
-            deviceId: route.endpointDeviceIds?.branches?.[branch.id],
-            point: branch.points[branch.points.length - 1],
-          }
-        : undefined;
-      const endLabel = routeEndpointLabel(endpoint, devicesById, `Split end ${index + 1}`);
-      return {
-        label: `${startLabel} - ${endLabel}`,
-        note: "Split route: includes shared trunk plus this branch.",
-        pixels: routePixels(route.points) + routePixels(branchPathPoints(route, branch)),
-      };
-    });
-  }
   const endEndpoint = routeEndpointReferences(route).find(
     (endpoint) => endpoint.pointIndex === route.points.length - 1,
   );
@@ -1596,9 +1418,6 @@ function isSameEndpoint(
   endpoint: ReturnType<typeof routeEndpointReferences>[number],
   point: DraggingCablePoint,
 ) {
-  if (point.branchId !== undefined) {
-    return endpoint.branchId === point.branchId;
-  }
   return endpoint.pointIndex === point.pointIndex;
 }
 
@@ -1623,14 +1442,6 @@ function nextContinuationPointReference(
   route: CableRoute,
   reference: ContinuingCablePoint,
 ) {
-  if (reference.branchId !== undefined && reference.branchPointIndex !== undefined) {
-    const branch = route.branches?.find((candidate) => candidate.id === reference.branchId);
-    return {
-      routeId: route.id,
-      branchId: reference.branchId,
-      branchPointIndex: Math.max(0, (branch?.points.length ?? 1) - 1),
-    };
-  }
   if (reference.pointIndex === 0) {
     return {
       routeId: route.id,
@@ -1895,10 +1706,6 @@ function dedupeAdjacentPoints(points: Point[]) {
 }
 
 function routePointsToEndpoint(route: CableRoute, endpoint: RouteEndpointReference) {
-  if (endpoint.branchId) {
-    const branch = route.branches?.find((currentBranch) => currentBranch.id === endpoint.branchId);
-    return branch ? dedupeAdjacentPoints([...route.points, ...branch.points]) : route.points;
-  }
   if (endpoint.pointIndex === 0) return [route.points[0]];
   if (endpoint.pointIndex !== undefined) return route.points.slice(0, endpoint.pointIndex + 1);
   return route.points;
@@ -2287,8 +2094,6 @@ function attachedCablePointsForDevice(device: Device, routes: CableRoute[]): Att
         .map((endpoint) => ({
           routeId: route.id,
           pointIndex: endpoint.pointIndex,
-          branchId: endpoint.branchId,
-          branchPointIndex: endpoint.branchPointIndex,
           startPoint: endpoint.point,
         })),
     );
@@ -2316,16 +2121,9 @@ function cloneCableRoute(route: CableRoute): CableRoute {
   return {
     ...route,
     points: route.points.map(clonePoint),
-    branches: route.branches?.map((branch) => ({
-      ...branch,
-      points: branch.points.map(clonePoint),
-    })),
     endpointDeviceIds: route.endpointDeviceIds
       ? {
           ...route.endpointDeviceIds,
-          branches: route.endpointDeviceIds.branches
-            ? { ...route.endpointDeviceIds.branches }
-            : undefined,
         }
       : undefined,
   };
@@ -2859,7 +2657,6 @@ function App() {
         visiblePlanCables.map((route) => ({
           ...route,
           points: scalePoints(route.points, viewScale),
-          branches: scaleBranches(route.branches, viewScale),
         })),
       ),
     [viewScale, visiblePlanCables],
@@ -3426,9 +3223,7 @@ function App() {
     const powerRoutes = cables.filter((route) => route.type === "power");
 
     const endpointKey = (endpoint: RouteEndpointReference) =>
-      endpoint.branchId !== undefined
-        ? `branch:${endpoint.branchId}`
-        : `point:${endpoint.pointIndex ?? ""}`;
+      `point:${endpoint.pointIndex ?? ""}`;
 
     const assignmentTargetsEndpoint = (
       assignment: ResolvedConsumerSource,
@@ -3486,30 +3281,12 @@ function App() {
       const downstreamEndpoints = endpoints.filter(
         (endpoint) => endpointKey(endpoint) !== sourceEndpointKey,
       );
-      const branchLoads = new Map<string, number>();
-      const branchLoadRatios: Record<string, number> = {};
-      const branchLoadWatts: Record<string, number> = {};
-
-      (route.branches ?? []).forEach((branch) => {
-        const endpoint = downstreamEndpoints.find((candidate) => candidate.branchId === branch.id);
-        if (!endpoint) return;
-        const loadWatts = endpointLoadWatts(route, endpoint);
-        branchLoads.set(branch.id, loadWatts);
-        branchLoadWatts[branch.id] = loadWatts;
-        branchLoadRatios[branch.id] = electricalLoadRatioForWatts(loadWatts);
-      });
-
-      const loadWatts =
-        branchLoads.size > 0
-          ? Math.max(...Array.from(branchLoads.values()))
-          : downstreamEndpoints.reduce(
-              (sum, endpoint) => sum + endpointLoadWatts(route, endpoint),
-              0,
-            );
+      const loadWatts = downstreamEndpoints.reduce(
+        (sum, endpoint) => sum + endpointLoadWatts(route, endpoint),
+        0,
+      );
 
       paths.set(route.id, {
-        branchLoadRatios,
-        branchLoadWatts,
         loadRatio: electricalLoadRatioForWatts(loadWatts),
         loadWatts,
       });
@@ -3619,7 +3396,6 @@ function App() {
     if (cableColorMode === "load") {
       const loadPath = electricalRouteLoadPaths.get(route.id);
       return {
-        branchLoadRatios: loadPath?.branchLoadRatios,
         loadRatio: loadPath?.loadRatio ?? 0,
         offsetPx: 0,
       };
@@ -3656,7 +3432,6 @@ function App() {
     if (!sourceEndpoint) return undefined;
     return {
       offsetPx: sourceEndpoint.upstreamPixels * viewScale,
-      sourceBranchId: sourceEndpoint.endpoint.branchId,
       sourcePointIndex: sourceEndpoint.endpoint.pointIndex,
     };
   };
@@ -5450,19 +5225,7 @@ function App() {
 
         let editedPoint = editPoint;
         if (shouldConstrain) {
-          if (
-            draggingCablePoint.branchId !== undefined &&
-            draggingCablePoint.branchPointIndex !== undefined
-          ) {
-            const branch = activeRoute.branches?.find(
-              (currentBranch) => currentBranch.id === draggingCablePoint.branchId,
-            );
-            const anchor =
-              draggingCablePoint.branchPointIndex === 0
-                ? activeRoute.points[activeRoute.points.length - 1]
-                : branch?.points[draggingCablePoint.branchPointIndex - 1];
-            editedPoint = anchor ? constrainTo45Degrees(anchor, editPoint) : editPoint;
-          } else if (draggingCablePoint.pointIndex !== undefined) {
+          if (draggingCablePoint.pointIndex !== undefined) {
             editedPoint = constrainEditedRoutePoint(
               activeRoute.points,
               draggingCablePoint.pointIndex,
@@ -5556,17 +5319,6 @@ function App() {
                 );
                 return attachment ? attachedDevicePoint : routePoint;
               }),
-              branches: route.branches?.map((branch) => ({
-                ...branch,
-                points: branch.points.map((branchPoint, index) => {
-                  const attachment = attachments.find(
-                    (attachedPoint) =>
-                      attachedPoint.branchId === branch.id &&
-                      attachedPoint.branchPointIndex === index,
-                  );
-                  return attachment ? attachedDevicePoint : branchPoint;
-                }),
-              })),
             };
             attachments.forEach((attachment) => {
               nextRoute = routeWithEndpointDeviceId(
@@ -5739,7 +5491,7 @@ function App() {
 
   function removeSelectedCablePoint() {
     if (!selectedCablePoint) return false;
-    if (selectedCablePoint.branchId || selectedCablePoint.pointIndex === undefined) return false;
+    if (selectedCablePoint.pointIndex === undefined) return false;
     const route = cables.find((currentRoute) => currentRoute.id === selectedCablePoint.routeId);
     if (
       !route ||
@@ -5870,10 +5622,6 @@ function App() {
         .map((route) => ({
           ...route,
           points: route.points.map(clonePoint),
-          branches: route.branches?.map((branch) => ({
-            ...branch,
-            points: branch.points.map(clonePoint),
-          })),
         })),
       pointerId: event.pointerId,
       startPoint: pointerFromEvent(event, false),
@@ -5893,10 +5641,6 @@ function App() {
       initialCables: selectedCables.map((route) => ({
         ...route,
         points: route.points.map(clonePoint),
-        branches: route.branches?.map((branch) => ({
-          ...branch,
-          points: branch.points.map(clonePoint),
-        })),
       })),
       initialDevices: selectedDevices.map((device) => ({
         ...device,
@@ -5935,10 +5679,6 @@ function App() {
         .map((route) => ({
           ...route,
           points: route.points.map(clonePoint),
-          branches: route.branches?.map((branch) => ({
-            ...branch,
-            points: branch.points.map(clonePoint),
-          })),
         })),
       maxScale: 8,
       pointerId: event.pointerId,
@@ -6040,25 +5780,22 @@ function App() {
 
   function continuableEndpointTargets(route: CableRoute) {
     const pointIndices = new Set<number>();
-    const branchPointKeys = new Set<string>();
     if (
       route.type !== activeCable ||
       routeDraft.length > 0 ||
       continuingCablePoint ||
       route.page !== pageNumber
     ) {
-      return { branchPointKeys, pointIndices };
+      return pointIndices;
     }
 
     routeEndpointReferences(route).forEach((endpoint) => {
       if (endpoint.deviceId || isInternalCableJunctionEndpoint(route, endpoint)) return;
-      if (endpoint.branchId !== undefined && endpoint.branchPointIndex !== undefined) {
-        branchPointKeys.add(`${endpoint.branchId}:${endpoint.branchPointIndex}`);
-      } else if (endpoint.pointIndex !== undefined) {
+      if (endpoint.pointIndex !== undefined) {
         pointIndices.add(endpoint.pointIndex);
       }
     });
-    return { branchPointKeys, pointIndices };
+    return pointIndices;
   }
 
   function beginCableContinuation(routeId: string, event: PointerEvent<SVGCircleElement>) {
@@ -6067,18 +5804,10 @@ function App() {
       return;
     }
 
-    const branchId = event.currentTarget.dataset.branchId;
-    const pointReference =
-      branchId !== undefined
-        ? {
-            routeId,
-            branchId,
-            branchPointIndex: Number(event.currentTarget.dataset.branchPointIndex),
-          }
-        : {
-            routeId,
-            pointIndex: Number(event.currentTarget.dataset.pointIndex),
-          };
+    const pointReference = {
+      routeId,
+      pointIndex: Number(event.currentTarget.dataset.pointIndex),
+    };
     const endpoint = routeEndpointReferences(route).find((candidate) =>
       isSameEndpoint(candidate, pointReference),
     );
@@ -6205,59 +5934,6 @@ function App() {
     setMode("select");
   }
 
-  function addCableSplit(routeId: string) {
-    setCables((current) =>
-      current.map((route) => {
-        if (route.id !== routeId || route.points.length === 0) return route;
-        const splitPoint = route.points[route.points.length - 1];
-        const branches = route.branches ?? [];
-        if (branches.length === 0) {
-          return {
-            ...route,
-            branches: [
-              {
-                id: createId("branch"),
-                points: [
-                  clampPoint({ x: splitPoint.x - 24, y: splitPoint.y + 32 }, modelPageSize),
-                ],
-              },
-              {
-                id: createId("branch"),
-                points: [
-                  clampPoint({ x: splitPoint.x + 24, y: splitPoint.y + 32 }, modelPageSize),
-                ],
-              },
-            ],
-          };
-        }
-        const direction = branches.length % 2 === 0 ? 1 : -1;
-        return {
-          ...route,
-          branches: [
-            ...branches,
-            {
-              id: createId("branch"),
-              points: [
-                clampPoint(
-                  {
-                    x: splitPoint.x + direction * (28 + branches.length * 12),
-                    y: splitPoint.y + 32,
-                  },
-                  modelPageSize,
-                ),
-              ],
-            },
-          ],
-        };
-      }),
-    );
-    setSelectedId(routeId);
-    setSelectedDeviceIds([]);
-    setSelectedCableIds([routeId]);
-    setSelectedCablePoint(null);
-    setMode("select");
-  }
-
   const visibleMeasurements = [
     ...measurements,
     ...(measurementDraft ? [measurementDraft] : []),
@@ -6290,7 +5966,7 @@ function App() {
             value: materialMeters !== undefined ? lengthLabel(materialMeters) : "Set scale",
           },
           {
-            label: (selectedCableRoute.branches?.length ?? 0) > 0 ? "Load (max branch)" : "Load",
+            label: "Load",
             value: wattsLabel(loadWatts),
           },
           {
@@ -6395,15 +6071,8 @@ function App() {
     setSelectedDeviceIds([]);
     setSelectedCableIds([routeId]);
     setMode("select");
-    const branchId = event.currentTarget.dataset.branchId;
-    let dragPoint: DraggingCablePoint;
-    if (branchId) {
-      const branchPointIndex = Number(event.currentTarget.dataset.branchPointIndex);
-      dragPoint = { routeId, branchId, branchPointIndex };
-    } else {
-      const pointIndex = Number(event.currentTarget.dataset.pointIndex);
-      dragPoint = { routeId, pointIndex };
-    }
+    const pointIndex = Number(event.currentTarget.dataset.pointIndex);
+    const dragPoint: DraggingCablePoint = { routeId, pointIndex };
     const route = currentCables.find((currentRoute) => currentRoute.id === routeId);
     const detachedDeviceId = route ? endpointDeviceIdForPoint(route, dragPoint) : undefined;
     const dragState = { ...dragPoint, detachedDeviceId };
@@ -7153,28 +6822,6 @@ function App() {
           </section>
         )}
 
-        {selectedCableRoute && (
-          <section className="tool-group editor-panel" aria-label="Selected cable split">
-            <h2>Cable split</h2>
-            <button type="button" onClick={() => addCableSplit(selectedCableRoute.id)}>
-              <GitBranch aria-hidden="true" />
-              {(selectedCableRoute.branches?.length ?? 0) > 0
-                ? "Add split end"
-                : "Create two-way split"}
-            </button>
-            <div className="status ready">
-              <Cable aria-hidden="true" />
-              {(selectedCableRoute.branches?.length ?? 0) > 0
-                ? `${selectedCableRoute.branches?.length ?? 0} cable ends after split`
-                : "Single cable run"}
-            </div>
-            <p className="source-status">
-              Split routes share one visual trunk, but stats count the trunk once per branch plus
-              each branch leg.
-            </p>
-          </section>
-        )}
-
         {selectedDevice && (
           <section className="tool-group editor-panel" aria-label="Selected device label">
             <h2>Label</h2>
@@ -7563,7 +7210,6 @@ function App() {
                         }
                       : undefined
                   }
-                  branches={scaleBranches(route.branches, viewScale)}
                   cableColorMode={cableColorMode}
                   colorPath={cableColorPathForRoute(route)}
                   conduitSegments={conduitSegmentLanes}
@@ -7576,14 +7222,9 @@ function App() {
                         }))
                       : []
                   }
-                  interactiveBranchPointKeys={
-                    mode === "cable"
-                      ? continuableEndpointTargets(route).branchPointKeys
-                      : undefined
-                  }
                   interactivePointIndices={
                     mode === "cable"
-                      ? continuableEndpointTargets(route).pointIndices
+                      ? continuableEndpointTargets(route)
                       : undefined
                   }
                   points={toDisplayPoints(route.points)}
@@ -8175,7 +7816,6 @@ function AutoSourceLink({
 
 function CableRouteView({
   active = false,
-  branches = [],
   cableColorMode,
   colorPath,
   config,
@@ -8188,14 +7828,12 @@ function CableRouteView({
   onConduitSegmentClick,
   onConduitSegmentPointerDown,
   onPointPointerDown,
-  interactiveBranchPointKeys,
   interactivePointIndices,
   looseEndpointPulses,
   points,
   selectedPointIndex,
 }: {
   active?: boolean;
-  branches?: CableBranch[];
   cableColorMode: CableColorMode;
   colorPath?: CableColorPath;
   config: CableConfig;
@@ -8208,7 +7846,6 @@ function CableRouteView({
   onConduitSegmentClick?: MouseEventHandler<SVGLineElement>;
   onConduitSegmentPointerDown?: PointerEventHandler<SVGLineElement>;
   onPointPointerDown?: PointerEventHandler<SVGCircleElement>;
-  interactiveBranchPointKeys?: Set<string>;
   interactivePointIndices?: Set<number>;
   looseEndpointPulses: LooseCableEndpointPulse[];
   points: Point[];
@@ -8217,42 +7854,17 @@ function CableRouteView({
   let travelled = 0;
   const maxLengthPx = displayPixelsPerMeter * config.maxLengthM;
   const ratioForPixels = (pixels: number) => (maxLengthPx ? pixels / maxLengthPx : 0);
-  const colorRatioForPixels = (pixels: number, branchId?: string) =>
-    branchId !== undefined && colorPath?.branchLoadRatios?.[branchId] !== undefined
-      ? colorPath.branchLoadRatios[branchId]
-      : colorPath?.loadRatio ?? ratioForPixels(pixels);
+  const colorRatioForPixels = (pixels: number) => colorPath?.loadRatio ?? ratioForPixels(pixels);
   const segmentColor = (ratio: number) =>
     cableColorMode === "type" ? config.colorStart : colorAtRatio(ratio);
-  const trunkPixels = routePixels(points);
   const sourcePointIndex = colorPath?.sourcePointIndex ?? 0;
   const sourceTrunkPixels =
     sourcePointIndex !== undefined && sourcePointIndex >= 0 && sourcePointIndex < points.length
       ? cumulativePixelsAtPoint(points, sourcePointIndex)
       : 0;
-  const sourceBranch = branches.find((branch) => branch.id === colorPath?.sourceBranchId);
-  const sourceBranchPixels =
-    sourceBranch !== undefined
-      ? routePixels(branchPathPoints({ id: "", page: 0, points, type: config.id }, sourceBranch))
-      : undefined;
   const colorDistanceForTrunkPixels = (pixels: number) =>
-    sourceBranchPixels !== undefined
-      ? (colorPath?.offsetPx ?? 0) + sourceBranchPixels + Math.max(0, trunkPixels - pixels)
-      : (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceTrunkPixels);
-  const branchColorDistance = (branchId: string, pixels: number) =>
-    colorPath?.sourceBranchId === branchId && sourceBranchPixels !== undefined
-      ? (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceBranchPixels)
-      : colorDistanceForTrunkPixels(trunkPixels) + pixels;
+    (colorPath?.offsetPx ?? 0) + Math.abs(pixels - sourceTrunkPixels);
   const looseEndpointPulseColor = (pulse: LooseCableEndpointPulse) => {
-    if (pulse.branchId !== undefined) {
-      const branch = branches.find((candidate) => candidate.id === pulse.branchId);
-      if (branch) {
-        const branchPath = branchPathPoints({ id: "", page: 0, points, type: config.id }, branch);
-        const branchPointIndex = pulse.branchPointIndex ?? branch.points.length - 1;
-        const pathPointIndex = Math.min(branchPath.length - 1, branchPointIndex + 1);
-        const pixels = routePixels(branchPath.slice(0, pathPointIndex + 1));
-        return segmentColor(colorRatioForPixels(branchColorDistance(branch.id, pixels), branch.id));
-      }
-    }
     const pointIndex = pulse.pointIndex ?? points.findIndex((point) => samePoint(point, pulse.point));
     const pixels =
       pointIndex >= 0 && pointIndex < points.length
@@ -8343,42 +7955,6 @@ function CableRouteView({
           </g>
         );
       })}
-      {branches.map((branch) =>
-        branchPathPoints({ id: "", page: 0, points, type: config.id }, branch)
-          .slice(1)
-          .map((point, index) => {
-            const branchPath = branchPathPoints({ id: "", page: 0, points, type: config.id }, branch);
-            const start = branchPath[index];
-            const branchTravelled = routePixels(branchPath.slice(0, index + 1));
-            const segmentLength = distance(start, point);
-            const gradientId = `${config.id}-${branch.id}-${start.x}-${start.y}-${point.x}-${point.y}`;
-            return (
-              <g key={`${branch.id}-${point.x}-${point.y}-${index}`}>
-                <defs>
-                  <linearGradient
-                    gradientUnits="userSpaceOnUse"
-                    id={gradientId}
-                    x1={start.x}
-                    x2={point.x}
-                    y1={start.y}
-                    y2={point.y}
-                  >
-                    <stop offset="0%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branch.id, branchTravelled), branch.id))} />
-                    <stop offset="100%" stopColor={segmentColor(colorRatioForPixels(branchColorDistance(branch.id, branchTravelled + segmentLength), branch.id))} />
-                  </linearGradient>
-                </defs>
-                <line
-                  className="branch-line"
-                  x1={start.x}
-                  x2={point.x}
-                  y1={start.y}
-                  y2={point.y}
-                  style={{ stroke: `url(#${gradientId})` }}
-                />
-              </g>
-            );
-          }),
-      )}
       {looseEndpointPulses.map((pulse, index) => (
         <path
           className="loose-cable-end-pulse"
@@ -8419,33 +7995,6 @@ function CableRouteView({
           />
         </g>
       ))}
-      {branches.flatMap((branch) =>
-        branch.points.map((point, index) => (
-          <g key={`${branch.id}-${point.x}-${point.y}-${index}`}>
-            {!draft &&
-              onPointPointerDown &&
-              (!interactiveBranchPointKeys ||
-                interactiveBranchPointKeys.has(`${branch.id}:${index}`)) && (
-              <circle
-                className="route-node-hit"
-                cx={point.x}
-                cy={point.y}
-                data-branch-id={branch.id}
-                data-branch-point-index={index}
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={onPointPointerDown}
-                r="11"
-              />
-            )}
-            <circle
-              className="route-node editable branch-node"
-              cx={point.x}
-              cy={point.y}
-              r="4"
-            />
-          </g>
-        )),
-      )}
     </g>
   );
 }
