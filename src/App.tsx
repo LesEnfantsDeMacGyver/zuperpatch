@@ -108,6 +108,7 @@ type DeviceCableAttachment = {
 };
 
 type AttachedCablePoint = {
+  deviceId: string;
   routeId: string;
   pointIndex?: number;
   startPoint: Point;
@@ -1245,15 +1246,30 @@ function constrainAttachedDevicePoint(
   attachments: AttachedCablePoint[],
   routes: CableRoute[],
   shouldConstrain: boolean,
+  viewScale: number,
 ) {
-  if (!shouldConstrain || attachments.length === 0) return target;
-  const anchor = attachments
+  if (attachments.length === 0) return target;
+  const anchors = attachments
     .map((attachment) => {
       const route = routes.find((currentRoute) => currentRoute.id === attachment.routeId);
       return route ? attachedPointSnapAnchor(route, attachment) : undefined;
     })
-    .find((point): point is Point => Boolean(point));
-  return anchor ? constrainTo45Degrees(anchor, target) : target;
+    .filter((point): point is Point => Boolean(point));
+  const anchor = anchors[0];
+  if (!anchor) return target;
+  if (shouldConstrain) return constrainTo45Degrees(anchor, target);
+
+  const snapDistance = cablePointSnapRadiusPx / viewScale;
+  return anchors
+    .map((currentAnchor) => {
+      const point = constrainTo45Degrees(currentAnchor, target);
+      return {
+        distancePx: distance(point, target),
+        point,
+      };
+    })
+    .filter((candidate) => candidate.distancePx <= snapDistance)
+    .sort((a, b) => a.distancePx - b.distancePx)[0]?.point ?? target;
 }
 
 function scalePoint(point: Point, scale: number) {
@@ -2170,6 +2186,7 @@ function attachedCablePointsForDevice(device: Device, routes: CableRoute[]): Att
       routeEndpointReferences(route)
         .filter((endpoint) => endpoint.deviceId === device.id)
         .map((endpoint) => ({
+          deviceId: device.id,
           routeId: route.id,
           pointIndex: endpoint.pointIndex,
           startPoint: endpoint.point,
@@ -5198,18 +5215,32 @@ function App() {
       };
       const delta = rawDelta;
       const selectedCableIdSet = new Set(draggingSelection.cableIds);
+      const shouldConstrain = event.shiftKey || isShiftPressed;
+      const movedDevicePoints = new Map(
+        draggingSelection.initialDevices.map((initialDevice) => {
+          const targetPoint = translatePoint(initialDevice.point, delta);
+          const attachments = draggingSelection.detachAttachedCablePoints
+            ? []
+            : draggingSelection.attachedCablePoints.filter(
+                (attachment) => attachment.deviceId === initialDevice.id,
+              );
+          return [
+            initialDevice.id,
+            constrainAttachedDevicePoint(
+              targetPoint,
+              attachments,
+              draggingSelection.initialRoutes,
+              shouldConstrain,
+              viewScale,
+            ),
+          ];
+        }),
+      );
 
       setDevices((current) =>
         current.map((device) => {
-          const initialDevice = draggingSelection.initialDevices.find(
-            (candidate) => candidate.id === device.id,
-          );
-          return initialDevice
-            ? {
-                ...device,
-                point: translatePoint(initialDevice.point, delta),
-              }
-            : device;
+          const movedPoint = movedDevicePoints.get(device.id);
+          return movedPoint ? { ...device, point: movedPoint } : device;
         }),
       );
       setCables((current) =>
@@ -5234,7 +5265,8 @@ function App() {
               routeWithCablePoint(
                 editedRoute,
                 attachment,
-                translatePoint(attachment.startPoint, delta),
+                movedDevicePoints.get(attachment.deviceId) ??
+                  translatePoint(attachment.startPoint, delta),
               ),
             initialRoute,
           );
@@ -5482,6 +5514,7 @@ function App() {
             draggingDevice.attachedCablePoints,
             cables,
             shouldConstrain,
+            viewScale,
           );
       setDevices((current) =>
         current.map((device) =>
