@@ -1789,12 +1789,28 @@ function endpointForDevice(route: CableRoute, deviceId: string) {
   return routeEndpointReferences(route).find((endpoint) => endpoint.deviceId === deviceId);
 }
 
-function preferredPowerSourceEndpoint(route: CableRoute, devicesById: Map<string, Device>) {
+function preferredPowerSourceEndpoint(
+  route: CableRoute,
+  devicesById: Map<string, Device>,
+  routes: CableRoute[],
+) {
   const endpoints = routeEndpointReferences(route);
-  return (
-    endpoints.find((endpoint) => endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "producer") ??
-    endpoints.find((endpoint) => endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "powerstrip")
+  const producerEndpoint = endpoints.find(
+    (endpoint) => endpoint.deviceId && devicesById.get(endpoint.deviceId)?.type === "producer",
   );
+  if (producerEndpoint) return producerEndpoint;
+  return endpoints.find((endpoint) => {
+    if (!endpoint.deviceId) return false;
+    if (devicesById.get(endpoint.deviceId)?.type !== "powerstrip") return false;
+    return Boolean(
+      upstreamProducerIdForPowerstrip(
+        endpoint.deviceId,
+        devicesById,
+        routes,
+        new Set([route.id]),
+      ),
+    );
+  });
 }
 
 function nearestRouteEndpoint(route: CableRoute, point: Point) {
@@ -2048,7 +2064,7 @@ function upstreamPowerPathPixelsToRouteEndpoint(
     return upstreamPowerPathPixelsToDevice(targetEndpoint.deviceId as string, devicesById, routes);
   }
 
-  const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById);
+  const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById, routes);
   if (!sourceEndpoint) return undefined;
   const sourcePixels = upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, routes);
   if (sourcePixels === undefined) return undefined;
@@ -3331,7 +3347,7 @@ function App() {
     }
 
     powerRoutes.forEach((route) => {
-      const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById);
+      const sourceEndpoint = preferredPowerSourceEndpoint(route, devicesById, cables);
       const sourceEndpointKey = sourceEndpoint ? endpointKey(sourceEndpoint) : undefined;
       const endpoints = routeEndpointReferences(route).filter(
         (endpoint) => !isInternalCableJunctionEndpoint(route, endpoint),
@@ -3597,7 +3613,7 @@ function App() {
                           devicesById,
                           cables,
                         )
-                      : preferredPowerSourceEndpoint(currentRoute, devicesById);
+                      : preferredPowerSourceEndpoint(currentRoute, devicesById, cables);
                   if (!upstreamSourceEndpoint) return undefined;
                   const upstreamPixels = upstreamPowerPathPixelsToRouteEndpoint(
                     currentRoute,
@@ -3691,6 +3707,7 @@ function App() {
           return;
         }
         if (source.type === "powerstrip") {
+          if (powerPathPixelsToPowerstripWithAuto(source.id) === undefined) return;
           addPowerFlowToDevice(
             source.id,
             `${idPrefix}-auto-upstream-${source.id}`,
@@ -3709,7 +3726,7 @@ function App() {
                 devicesById,
                 cables,
               )
-            : preferredPowerSourceEndpoint(source.route, devicesById);
+            : preferredPowerSourceEndpoint(source.route, devicesById, cables);
           if (!targetEndpoint || !sourceEndpoint) return;
           const sourceOffsetPx =
             upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
@@ -3893,7 +3910,7 @@ function App() {
             targetEndpoint.deviceId ?? "",
             devicesById,
             cables,
-          ) ?? preferredPowerSourceEndpoint(assignment.source.route, devicesById)
+          ) ?? preferredPowerSourceEndpoint(assignment.source.route, devicesById, cables)
         : undefined;
       if (!targetEndpoint || !sourceEndpoint) return;
       const sourceOffsetPx =
@@ -3918,6 +3935,7 @@ function App() {
         if (source && targetPoint && source.type === "producer") {
           addAutoSourceFlow(selectedDevice.id, source);
         } else if (source && targetPoint && source.type === "powerstrip") {
+          if (powerPathPixelsToPowerstripWithAuto(source.id) === undefined) return paths;
           addPowerFlowToDevice(source.id, `power-strip-feed-${source.id}`);
           addAutoSourceFlow(selectedDevice.id, source);
         } else if (source && targetPoint && source.type === "powerCable" && source.route) {
@@ -3930,7 +3948,7 @@ function App() {
                   devicesById,
                   cables,
                 )
-              : preferredPowerSourceEndpoint(source.route, devicesById);
+              : preferredPowerSourceEndpoint(source.route, devicesById, cables);
           if (targetEndpoint && sourceEndpoint) {
             const sourceOffsetPx =
               upstreamPowerPathPixelsToEndpoint(sourceEndpoint, devicesById, cables) ?? 0;
@@ -4022,6 +4040,7 @@ function App() {
     consumerSourceAssignments,
     devicesById,
     pixelsPerMeter,
+    powerPathPixelsToPowerstripWithAuto,
     powerstripSourceAssignments,
     selectedConsumerAssignment,
     selectedDevice,
@@ -7491,26 +7510,30 @@ function App() {
 
               {(!hoveredPlanCableType || hoveredPlanCableType === "power") &&
                 visibleAutoSourceAssignments.map((assignment) => {
-                  const startPoint = assignment.consumer.point;
-                  const endPoint = assignment.targetPoint;
+                  const consumerPoint = assignment.consumer.point;
+                  const sourcePoint = assignment.targetPoint;
                   const upstreamPixels = powerPathPixelsToAssignmentSource(assignment);
                   const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
                   const isStraightSourceLink = isManualProducerSourceAssignment(assignment);
                   const routedArc = routedAutoSourceLinks.get(linkId);
                   const start = toDisplayPoint(
-                    isStraightSourceLink ? startPoint : routedArc?.start ?? startPoint,
+                    isStraightSourceLink ? sourcePoint : routedArc?.end ?? sourcePoint,
                   );
                   const end = toDisplayPoint(
-                    isStraightSourceLink ? endPoint : routedArc?.end ?? endPoint,
+                    isStraightSourceLink ? consumerPoint : routedArc?.start ?? consumerPoint,
                   );
                   const control = toDisplayPoint(
-                    routedArc?.control ?? sourceArcControl(startPoint, endPoint),
+                    routedArc?.control ?? sourceArcControl(consumerPoint, sourcePoint),
                   );
                   const arcPixels =
                     isStraightSourceLink
-                      ? distance(startPoint, endPoint)
+                      ? distance(consumerPoint, sourcePoint)
                       : routedArc?.arcPixels ??
-                        sourceArcPixels(startPoint, endPoint, sourceArcControl(startPoint, endPoint));
+                        sourceArcPixels(
+                          consumerPoint,
+                          sourcePoint,
+                          sourceArcControl(consumerPoint, sourcePoint),
+                        );
                   const maxLengthPx = pixelsPerMeter * cableTypes.power.maxLengthM;
                   const loadWatts =
                     assignment.consumer.type === "powerstrip"
@@ -7524,11 +7547,11 @@ function App() {
                   const startRatio =
                     cableColorMode === "load"
                       ? loadRatio
-                      : consumerLengthRatio;
+                      : sourceLengthRatio;
                   const endRatio =
                     cableColorMode === "load"
                       ? loadRatio
-                      : sourceLengthRatio;
+                      : consumerLengthRatio;
                   const startColor =
                     cableColorMode === "type"
                       ? cableTypes.power.colorStart
@@ -8047,7 +8070,7 @@ function AutoSourceLink({
             dur="1.2s"
             from="0"
             repeatCount="indefinite"
-            to={String(flowDashCyclePx)}
+            to={String(-flowDashCyclePx)}
           />
         )}
       </path>
