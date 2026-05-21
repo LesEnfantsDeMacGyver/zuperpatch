@@ -6410,22 +6410,19 @@ function App() {
           if (!isVisibleSourceLink) return false;
           const linkId = autoSourceLinkId(assignment.consumer.id, assignment.source);
           const isFlowing = selectedAutoSourceFlowIds.has(linkId);
-          return (
-            (assignment.consumer.id !== selectedDevice?.id || isFlowing) &&
-            !(
-              selectedDevice?.type === "producer" &&
-              !isFlowing &&
-              (assignment.source.type === "producer"
-                ? assignment.source.id === selectedDevice.id
-                : assignment.source.type === "powerstrip"
-                  ? producerIdForPowerstripWithAuto(assignment.source.id) === selectedDevice.id
-                  : assignment.source.route &&
-                    upstreamProducerIdForPowerRoute(
-                      assignment.source.route,
-                      devicesById,
-                      cables,
-                    ) === selectedDevice.id)
-            )
+          return !(
+            selectedDevice?.type === "producer" &&
+            !isFlowing &&
+            (assignment.source.type === "producer"
+              ? assignment.source.id === selectedDevice.id
+              : assignment.source.type === "powerstrip"
+                ? producerIdForPowerstripWithAuto(assignment.source.id) === selectedDevice.id
+                : assignment.source.route &&
+                  upstreamProducerIdForPowerRoute(
+                    assignment.source.route,
+                    devicesById,
+                    cables,
+                  ) === selectedDevice.id)
           );
         },
       ),
