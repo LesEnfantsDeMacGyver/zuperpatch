@@ -6150,14 +6150,46 @@ function App() {
 
   function insertCablePoint(routeId: string, event: PointerEvent<SVGGElement>) {
     event.stopPropagation();
-    const route = cables.find((currentRoute) => currentRoute.id === routeId);
-    if (!route) return;
-    const insertion = insertionPointForRoute(pointerFromEvent(event), route);
-    if (!insertion) return;
+    insertCablePoints([routeId], pointerFromEvent(event), routeId);
+  }
+
+  function insertConduitCablePoint(routeId: string, event: PointerEvent<SVGLineElement>) {
+    event.stopPropagation();
+    const routeIds = (event.currentTarget.dataset.routeIds ?? "")
+      .split(",")
+      .filter(Boolean);
+    const conduitRouteIds = routeIds.length > 0 ? routeIds : [routeId];
+    const conduitRouteIdSet = new Set(conduitRouteIds);
+    const selectedConduitRouteIds = selectedCableIds.filter((selectedRouteId) =>
+      conduitRouteIdSet.has(selectedRouteId),
+    );
+    const targetRouteIds = selectedConduitRouteIds.length > 0
+      ? selectedConduitRouteIds
+      : selectedId && conduitRouteIdSet.has(selectedId)
+        ? [selectedId]
+        : [routeId];
+
+    insertCablePoints(targetRouteIds, pointerFromEvent(event), routeId);
+  }
+
+  function insertCablePoints(routeIds: string[], point: Point, primaryRouteId: string) {
+    const targetRouteIds = [...new Set(routeIds)];
+    const insertions = targetRouteIds.flatMap((routeId) => {
+      const route = cables.find((currentRoute) => currentRoute.id === routeId);
+      if (!route) return [];
+      const insertion = insertionPointForRoute(point, route);
+      return insertion ? [{ routeId, insertion }] : [];
+    });
+    if (insertions.length === 0) return;
+
+    const insertionByRouteId = new Map(
+      insertions.map(({ routeId, insertion }) => [routeId, insertion]),
+    );
 
     setCables((current) =>
-      current.map((currentRoute) =>
-        currentRoute.id === routeId
+      current.map((currentRoute) => {
+        const insertion = insertionByRouteId.get(currentRoute.id);
+        return insertion
           ? {
               ...currentRoute,
               points: [
@@ -6166,14 +6198,29 @@ function App() {
                 ...currentRoute.points.slice(insertion.pointIndex),
               ],
             }
-          : currentRoute,
-      ),
+          : currentRoute;
+      }),
     );
-    setSelectedId(routeId);
+    const insertedRouteIds = insertions.map(({ routeId }) => routeId);
+    const primaryInsertion =
+      insertionByRouteId.get(primaryRouteId) ?? insertions[0]?.insertion;
+    const primaryInsertedRouteId = insertionByRouteId.has(primaryRouteId)
+      ? primaryRouteId
+      : insertedRouteIds[0];
+
+    setSelectedId(primaryInsertedRouteId);
     setSelectedDeviceIds([]);
-    setSelectedCableIds([routeId]);
-    setSelectedCablePoint({ routeId, pointIndex: insertion.pointIndex });
-    setDraggingCablePoint({ routeId, pointIndex: insertion.pointIndex });
+    setSelectedCableIds(insertedRouteIds);
+    setSelectedCablePoint(
+      insertedRouteIds.length === 1 && primaryInsertion
+        ? { routeId: primaryInsertedRouteId, pointIndex: primaryInsertion.pointIndex }
+        : null,
+    );
+    setDraggingCablePoint(
+      insertedRouteIds.length === 1 && primaryInsertion
+        ? { routeId: primaryInsertedRouteId, pointIndex: primaryInsertion.pointIndex }
+        : null,
+    );
     setMode("select");
   }
 
@@ -6437,15 +6484,30 @@ function App() {
       return;
     }
 
+    const selectedConduitRouteIds = selectedCableIds.filter((selectedRouteId) =>
+      routeIds.includes(selectedRouteId),
+    );
+    const allConduitRoutesSelected = routeIds.every((candidateRouteId) =>
+      selectedConduitRouteIds.includes(candidateRouteId),
+    );
+    if (allConduitRoutesSelected) {
+      selectObjects([], [routeIds[0]]);
+      setMode("select");
+      return;
+    }
+
     const currentRouteId =
-      selectedCableIds.length === 1 && routeIds.includes(selectedCableIds[0])
-        ? selectedCableIds[0]
+      selectedConduitRouteIds.length === 1
+        ? selectedConduitRouteIds[0]
         : routeIds.includes(selectedId ?? "")
           ? selectedId
           : undefined;
     const currentIndex = currentRouteId ? routeIds.indexOf(currentRouteId) : -1;
-    const nextRouteId = routeIds[(currentIndex + 1 + routeIds.length) % routeIds.length];
-    selectObjects([], [nextRouteId]);
+    const nextRouteIds =
+      currentIndex === routeIds.length - 1
+        ? routeIds
+        : [routeIds[(currentIndex + 1 + routeIds.length) % routeIds.length]];
+    selectObjects([], nextRouteIds);
     setMode("select");
   }
 
@@ -7541,6 +7603,13 @@ function App() {
                         }
                       : undefined
                   }
+                  onConduitSegmentPointInsert={
+                    mode === "select"
+                      ? (event) => {
+                          insertConduitCablePoint(route.id, event);
+                        }
+                      : undefined
+                  }
                   onConduitSegmentClick={
                     mode === "select"
                       ? (event) => {
@@ -8179,6 +8248,7 @@ function CableRouteView({
   routeId,
   onSelect,
   onConduitSegmentClick,
+  onConduitSegmentPointInsert,
   onConduitSegmentPointerDown,
   onPointPointerDown,
   interactivePointIndices,
@@ -8197,6 +8267,7 @@ function CableRouteView({
   routeId: string;
   onSelect?: PointerEventHandler<SVGGElement>;
   onConduitSegmentClick?: MouseEventHandler<SVGLineElement>;
+  onConduitSegmentPointInsert?: PointerEventHandler<SVGLineElement>;
   onConduitSegmentPointerDown?: PointerEventHandler<SVGLineElement>;
   onPointPointerDown?: PointerEventHandler<SVGCircleElement>;
   interactivePointIndices?: Set<number>;
@@ -8292,9 +8363,19 @@ function CableRouteView({
                   .join(" ")}
                 data-point-index={pointIndex}
                 data-route-ids={conduitLane.routeIds.join(",")}
-                onClick={onConduitSegmentClick}
+                onClick={(event) => {
+                  if (event.altKey) {
+                    event.stopPropagation();
+                    return;
+                  }
+                  onConduitSegmentClick?.(event);
+                }}
                 onPointerDown={(event) => {
                   event.stopPropagation();
+                  if (event.altKey) {
+                    onConduitSegmentPointInsert?.(event);
+                    return;
+                  }
                   if (conduitLane.draggable) {
                     onConduitSegmentPointerDown?.(event);
                   }
