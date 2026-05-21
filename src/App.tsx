@@ -131,7 +131,9 @@ type CablePointReference = DraggingCablePoint & {
   point: Point;
 };
 
-type SelectedCablePoint = DraggingCablePoint;
+type SelectedCablePoint = DraggingCablePoint & {
+  pointIndices?: number[];
+};
 type ContinuingCablePoint = DraggingCablePoint;
 type ViewPosition = { scrollLeft: number; scrollTop: number };
 type SpacePanDrag = {
@@ -521,6 +523,15 @@ function boundsIntersect(first: SelectionBounds, second: SelectionBounds) {
     first.maxX >= second.minX &&
     first.minY <= second.maxY &&
     first.maxY >= second.minY
+  );
+}
+
+function pointInBounds(point: Point, bounds: SelectionBounds, padding = 0) {
+  return (
+    point.x >= bounds.minX - padding &&
+    point.x <= bounds.maxX + padding &&
+    point.y >= bounds.minY - padding &&
+    point.y <= bounds.maxY + padding
   );
 }
 
@@ -4940,6 +4951,35 @@ function App() {
     const bounds = normalizeBounds(selectionRect.start, endPoint);
     const didDrag = distance(selectionRect.start, endPoint) > 4;
     if (didDrag) {
+      const pointHitPadding = 10 / viewScale;
+      const selectedCablePointGroup = currentCables
+        .map((route) => ({
+          pointIndices: route.points
+            .map((point, pointIndex) =>
+              pointInBounds(point, bounds, pointHitPadding) ? pointIndex : undefined,
+            )
+            .filter((pointIndex): pointIndex is number => pointIndex !== undefined),
+          routeId: route.id,
+        }))
+        .filter((group) => group.pointIndices.length > 0)
+        .sort((first, second) => second.pointIndices.length - first.pointIndices.length)[0];
+
+      if (selectedCablePointGroup) {
+        setSelectedId(selectedCablePointGroup.routeId);
+        setSelectedDeviceIds([]);
+        setSelectedCableIds([]);
+        setSelectedCablePoint({
+          routeId: selectedCablePointGroup.routeId,
+          pointIndex: selectedCablePointGroup.pointIndices[0],
+          pointIndices: selectedCablePointGroup.pointIndices,
+        });
+        setSelectionRect(null);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        return true;
+      }
+
       const selectedFromRectDevices = currentDevices
         .filter((device) => boundsIntersect(bounds, boundsFromPoints([device.point], 12) as SelectionBounds))
         .map((device) => device.id);
@@ -5651,15 +5691,17 @@ function App() {
 
   function removeSelectedCablePoint() {
     if (!selectedCablePoint) return false;
-    if (selectedCablePoint.pointIndex === undefined) return false;
+    const selectedPointIndices = selectedCablePoint.pointIndices ??
+      (selectedCablePoint.pointIndex !== undefined ? [selectedCablePoint.pointIndex] : []);
+    if (selectedPointIndices.length === 0) return false;
     const route = cables.find((currentRoute) => currentRoute.id === selectedCablePoint.routeId);
-    if (
-      !route ||
-      selectedCablePoint.pointIndex <= 0 ||
-      selectedCablePoint.pointIndex >= route.points.length - 1
-    ) {
-      return false;
-    }
+    if (!route) return false;
+    const removablePointIndices = new Set(
+      selectedPointIndices.filter(
+        (pointIndex) => pointIndex > 0 && pointIndex < route.points.length - 1,
+      ),
+    );
+    if (removablePointIndices.size === 0) return false;
 
     setCables((current) =>
       current.map((currentRoute) =>
@@ -5667,7 +5709,7 @@ function App() {
           ? {
               ...currentRoute,
               points: currentRoute.points.filter(
-                (_point, index) => index !== selectedCablePoint.pointIndex,
+                (_point, index) => !removablePointIndices.has(index),
               ),
             }
           : currentRoute,
@@ -7735,6 +7777,12 @@ function App() {
                       ? selectedCablePoint.pointIndex
                       : undefined
                   }
+                  selectedPointIndices={
+                    selectedCablePoint?.routeId === selectedCableRoute.id &&
+                    selectedCablePoint.pointIndices
+                      ? new Set(selectedCablePoint.pointIndices)
+                      : undefined
+                  }
                 />
               )}
 
@@ -7986,10 +8034,12 @@ function CableRouteEditPointLayer({
   onPointPointerDown,
   points,
   selectedPointIndex,
+  selectedPointIndices,
 }: {
   onPointPointerDown: PointerEventHandler<SVGCircleElement>;
   points: Point[];
   selectedPointIndex?: number;
+  selectedPointIndices?: Set<number>;
 }) {
   return (
     <g className="route-edit-layer">
@@ -8011,7 +8061,7 @@ function CableRouteEditPointLayer({
                 "editable",
                 "raised",
                 isEndpoint ? "endpoint" : "",
-                selectedPointIndex === index ? "selected" : "",
+                selectedPointIndex === index || selectedPointIndices?.has(index) ? "selected" : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
