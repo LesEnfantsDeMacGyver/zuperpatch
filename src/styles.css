@@ -277,6 +277,13 @@ h2 {
   display: none;
 }
 
+.toolbar-upload {
+  flex: 0 1 260px;
+  min-height: 40px;
+  min-width: 180px;
+  padding: 0.55rem 0.75rem;
+}
+
 .hidden-file-input {
   display: none;
 }
@@ -539,7 +546,7 @@ h2 {
   border-bottom: 1px solid var(--color-border);
   display: flex;
   gap: 1rem;
-  justify-content: flex-end;
+  justify-content: space-between;
   min-height: 64px;
   padding: 0.8rem 1rem;
 }
@@ -549,6 +556,8 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .plan-viewport {
@@ -1318,5 +1327,10 @@ dd {
   .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .toolbar-upload {
+    flex-basis: auto;
+    max-width: none;
   }
 }

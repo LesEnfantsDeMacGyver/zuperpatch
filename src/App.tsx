@@ -6380,16 +6380,6 @@ function App() {
             </div>
           </div>
 
-          <label className="upload-control">
-            <FileUp aria-hidden="true" />
-            <span>{pdfName || "Upload floor plan PDF"}</span>
-            <input
-              aria-label="Upload floor plan PDF"
-              accept="application/pdf"
-              type="file"
-              onChange={(event) => handleFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
           {storageNotice && (
             <p className="autosave-status warning">
               {storageNotice}
@@ -7193,6 +7183,16 @@ function App() {
 
       <section className="workspace" aria-label="Floor plan workspace">
         <header className="topbar">
+          <label className="upload-control toolbar-upload">
+            <FileUp aria-hidden="true" />
+            <span>{pdfName || "Upload floor plan PDF"}</span>
+            <input
+              aria-label="Upload floor plan PDF"
+              accept="application/pdf"
+              type="file"
+              onChange={(event) => handleFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
           <div className="action-strip">
             <button type="button" onClick={downloadProject}>
               <Download aria-hidden="true" />
