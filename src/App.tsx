@@ -4968,8 +4968,18 @@ function App() {
     const bounds = normalizeBounds(selectionRect.start, endPoint);
     const didDrag = distance(selectionRect.start, endPoint) > 4;
     if (didDrag) {
+      const selectedFromRectDevices = currentDevices
+        .filter((device) => boundsIntersect(bounds, boundsFromPoints([device.point], 12) as SelectionBounds))
+        .map((device) => device.id);
+      const selectedFromRectCables = currentCables
+        .filter((route) => {
+          const boundsForRoute = routeBounds(route);
+          return boundsForRoute ? boundsIntersect(bounds, boundsForRoute) : false;
+        })
+        .map((route) => route.id);
       const pointHitPadding = 10 / viewScale;
       const selectedCablePointGroup = currentCables
+        .filter((route) => selectedFromRectCables.includes(route.id))
         .map((route) => ({
           pointIndices: route.points
             .map((point, pointIndex) =>
@@ -4981,7 +4991,12 @@ function App() {
         .filter((group) => group.pointIndices.length > 0)
         .sort((first, second) => second.pointIndices.length - first.pointIndices.length)[0];
 
-      if (selectedCablePointGroup) {
+      if (
+        selectedCablePointGroup &&
+        !selectionRect.toggle &&
+        selectedFromRectDevices.length === 0 &&
+        selectedFromRectCables.length === 1
+      ) {
         setSelectedId(selectedCablePointGroup.routeId);
         setSelectedDeviceIds([]);
         setSelectedCableIds([]);
@@ -4997,15 +5012,6 @@ function App() {
         return true;
       }
 
-      const selectedFromRectDevices = currentDevices
-        .filter((device) => boundsIntersect(bounds, boundsFromPoints([device.point], 12) as SelectionBounds))
-        .map((device) => device.id);
-      const selectedFromRectCables = currentCables
-        .filter((route) => {
-          const boundsForRoute = routeBounds(route);
-          return boundsForRoute ? boundsIntersect(bounds, boundsForRoute) : false;
-        })
-        .map((route) => route.id);
       if (selectionRect.toggle) {
         const deviceSet = new Set(selectedDeviceIds);
         selectedFromRectDevices.forEach((deviceId) => {
