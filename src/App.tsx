@@ -2179,19 +2179,47 @@ function closestCompatibleDeviceForCablePoint(
     .sort((a, b) => a.distancePx - b.distancePx)[0]?.device;
 }
 
-function attachedCablePointsForDevice(device: Device, routes: CableRoute[]): AttachedCablePoint[] {
-  return routes
-    .filter((route) => route.page === device.page && route.points.length > 0)
-    .flatMap((route) =>
-      routeEndpointReferences(route)
-        .filter((endpoint) => endpoint.deviceId === device.id)
-        .map((endpoint) => ({
-          deviceId: device.id,
-          routeId: route.id,
-          pointIndex: endpoint.pointIndex,
-          startPoint: endpoint.point,
-        })),
-    );
+function attachedCablePointsForDevice(
+  device: Device,
+  routes: CableRoute[],
+  devices: Device[],
+): AttachedCablePoint[] {
+  const pageRoutes = routes.filter((route) => route.page === device.page && route.points.length > 0);
+  const explicitAttachmentPoints = pageRoutes.flatMap((route) =>
+    routeEndpointReferences(route)
+      .filter((endpoint) => endpoint.deviceId === device.id)
+      .map((endpoint) => endpoint.point),
+  );
+  const attachmentPoints = explicitAttachmentPoints.length > 0
+    ? explicitAttachmentPoints
+    : [device.point];
+
+  return pageRoutes.flatMap((route) =>
+    routeEndpointReferences(route)
+      .filter((endpoint) => {
+        if (endpoint.pointIndex === undefined) return false;
+        if (endpoint.deviceId && endpoint.deviceId !== device.id) return false;
+        if (
+          !attachmentPoints.some((attachmentPoint) =>
+            samePoint(attachmentPoint, endpoint.point),
+          )
+        ) {
+          return false;
+        }
+        return canAttachEndpointToDevice(
+          route,
+          { routeId: route.id, pointIndex: endpoint.pointIndex },
+          device,
+          devices,
+        );
+      })
+      .map((endpoint) => ({
+        deviceId: device.id,
+        routeId: route.id,
+        pointIndex: endpoint.pointIndex,
+        startPoint: endpoint.point,
+      })),
+  );
 }
 
 function fileToDataUrl(file: File) {
@@ -5844,7 +5872,7 @@ function App() {
     event.stopPropagation();
     beginUndoGroup();
     const attachedCablePoints = selectedDragDevices.flatMap((device) =>
-      attachedCablePointsForDevice(device, cables),
+      attachedCablePointsForDevice(device, cables, devices),
     );
     const detachAttachedCablePoints = event.altKey;
     const affectedRouteIds = new Set([
@@ -5902,7 +5930,7 @@ function App() {
     const center = selectionCenter(selectedObjectBounds);
     const point = pointerFromEvent(event, false);
     const attachedCablePoints = selectedDevices.flatMap((device) =>
-      attachedCablePointsForDevice(device, cables),
+      attachedCablePointsForDevice(device, cables, devices),
     );
     const affectedRouteIds = new Set([
       ...selectedCableIds,
@@ -7837,6 +7865,7 @@ function App() {
                         attachedCablePoints: attachedCablePointsForDevice(
                           device,
                           cables,
+                          devices,
                         ),
                       });
                     }}
