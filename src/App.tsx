@@ -31,6 +31,7 @@ import type {
   WheelEvent,
 } from "react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.mjs",
@@ -114,6 +115,7 @@ type AttachedCablePoint = {
 
 type DraggingDevice = {
   deviceId: string;
+  detachAttachedCablePoints: boolean;
   startPoint: Point;
   attachedCablePoints: AttachedCablePoint[];
 };
@@ -168,6 +170,7 @@ type DraggingSelection = {
   attachedCablePoints: AttachedCablePoint[];
   bounds: SelectionBounds;
   cableIds: string[];
+  detachAttachedCablePoints: boolean;
   initialDevices: Device[];
   initialRoutes: CableRoute[];
   pointerId: number;
@@ -1097,6 +1100,47 @@ function routeWithCablePoint(route: CableRoute, reference: DraggingCablePoint, p
       index === reference.pointIndex ? point : routePoint,
     ),
   };
+}
+
+function routeWithDetachedCablePoint(route: CableRoute, reference: DraggingCablePoint) {
+  return routeWithEndpointDeviceId(route, reference, undefined);
+}
+
+function compactRoutePoints(route: CableRoute) {
+  let changed = false;
+  const points = route.points.reduce<Point[]>((cleanPoints, point) => {
+    const previousPoint = cleanPoints[cleanPoints.length - 1];
+    if (previousPoint && distance(previousPoint, point) < 0.5) {
+      changed = true;
+      return cleanPoints;
+    }
+    return [...cleanPoints, point];
+  }, []);
+
+  if (points.length < 2) return undefined;
+  if (!changed) return route;
+
+  return {
+    ...route,
+    points,
+    endpointDeviceIds: {
+      start: route.endpointDeviceIds?.start,
+      end: route.endpointDeviceIds?.end,
+    },
+  };
+}
+
+function compactCableRoutes(routes: CableRoute[]) {
+  const compactedRoutes = routes
+    .map(compactRoutePoints)
+    .filter((route): route is CableRoute => Boolean(route));
+  if (
+    compactedRoutes.length === routes.length &&
+    compactedRoutes.every((route, index) => route === routes[index])
+  ) {
+    return routes;
+  }
+  return compactedRoutes;
 }
 
 function routeWithExtendedEndpoint(
@@ -2300,7 +2344,7 @@ function App() {
         setActiveDevice(project.activeDevice || "powerstrip");
         setKnownDistance(project.knownDistance || "10");
         setCalibration(project.calibration);
-        setCables(project.cables || []);
+        setCables(compactCableRoutes(project.cables || []));
         setDevices(project.devices || []);
         queueViewPositionRestore(project.viewPosition);
 
@@ -2524,16 +2568,18 @@ function App() {
         }
         if (shortcutKey === "c") {
           event.preventDefault();
+          const shouldCycleCable = mode === "cable" && !event.repeat;
           setMode("cable");
-          if (!event.repeat) {
+          if (shouldCycleCable) {
             setActiveCable((currentCable) => nextOption(cableTypeOrder, currentCable));
           }
           return;
         }
         if (shortcutKey === "d") {
           event.preventDefault();
+          const shouldCycleDevice = mode === "device" && !event.repeat;
           setMode("device");
-          if (!event.repeat) {
+          if (shouldCycleDevice) {
             setActiveDevice((currentDevice) => nextOption(deviceTypeOrder, currentDevice));
           }
           return;
@@ -4303,7 +4349,7 @@ function App() {
     setActiveDevice(project.activeDevice || "powerstrip");
     setKnownDistance(project.knownDistance || "10");
     setCalibration(project.calibration);
-    setCables(project.cables || []);
+    setCables(compactCableRoutes(project.cables || []));
     setDevices(project.devices || []);
     setRouteDraft([]);
     setRouteDraftDeviceIds([]);
@@ -4697,6 +4743,47 @@ function App() {
         y += 5;
       }
     };
+    const addSubItem = (name: string, quantity: string, note?: string) => {
+      addPageIfNeeded(note ? 12 : 7);
+      document.setFont("helvetica", "normal");
+      document.setFontSize(9);
+      document.text(name, margin + 4, y);
+      document.text(quantity, pageWidth - margin, y, { align: "right" });
+      y += 5;
+      if (note) {
+        document.setTextColor(90);
+        document.text(note, margin + 8, y);
+        document.setTextColor(0);
+        y += 5;
+      }
+    };
+    const addCableBucket = (
+      bucketLengthM: number,
+      entries: Array<{ label: string; note?: string; pixels: number }>,
+    ) => {
+      addPageIfNeeded(12);
+      document.setFont("helvetica", "bold");
+      document.setFontSize(10);
+      document.text(
+        `${lengthLabel(bucketLengthM)} cables`,
+        margin,
+        y,
+      );
+      document.text(
+        `${entries.length} segment${entries.length === 1 ? "" : "s"}`,
+        pageWidth - margin,
+        y,
+        { align: "right" },
+      );
+      y += 6;
+      entries.forEach((entry) => {
+        addSubItem(
+          entry.label,
+          pixelsPerMeter ? lengthLabel(entry.pixels / pixelsPerMeter) : "Scale not set",
+          entry.note,
+        );
+      });
+    };
 
     document.setTextColor(0);
     addLine("Bill of Materials", 18, "bold");
@@ -4705,16 +4792,28 @@ function App() {
     addSection("Cable");
     stats.forEach((stat) => {
       addCableGroup(stat);
-      cables
+      const entries = cables
         .filter((route) => route.type === stat.id)
-        .forEach((route) => {
-          cableBomEntries(route, devices).forEach((entry) => {
-            addItem(
-              entry.label,
-              pixelsPerMeter ? lengthLabel(entry.pixels / pixelsPerMeter) : "Scale not set",
-              entry.note,
-            );
-          });
+        .flatMap((route) => cableBomEntries(route, devices));
+
+      if (!pixelsPerMeter) {
+        entries.forEach((entry) => {
+          addItem(entry.label, "Scale not set", entry.note);
+        });
+        return;
+      }
+
+      const entriesByBucket = entries.reduce((buckets, entry) => {
+        const rawLengthM = entry.pixels / pixelsPerMeter;
+        const bucketLengthM = Math.max(5, Math.ceil(rawLengthM / 5) * 5);
+        buckets.set(bucketLengthM, [...(buckets.get(bucketLengthM) ?? []), entry]);
+        return buckets;
+      }, new Map<number, Array<{ label: string; note?: string; pixels: number }>>());
+
+      [...entriesByBucket.entries()]
+        .sort(([firstLength], [secondLength]) => firstLength - secondLength)
+        .forEach(([bucketLengthM, bucketEntries]) => {
+          addCableBucket(bucketLengthM, bucketEntries);
         });
     });
 
@@ -5065,6 +5164,12 @@ function App() {
           const attachments = draggingSelection.attachedCablePoints.filter(
             (attachment) => attachment.routeId === route.id,
           );
+          if (draggingSelection.detachAttachedCablePoints) {
+            return attachments.reduce<CableRoute>(
+              (editedRoute, attachment) => routeWithDetachedCablePoint(editedRoute, attachment),
+              initialRoute,
+            );
+          }
           return attachments.reduce<CableRoute>(
             (editedRoute, attachment) =>
               routeWithCablePoint(
@@ -5308,12 +5413,17 @@ function App() {
     }
     if (draggingDevice) {
       const editPoint = pointerFromEvent(event, false);
-      const attachedDevicePoint = constrainAttachedDevicePoint(
-        editPoint,
-        draggingDevice.attachedCablePoints,
-        cables,
-        event.shiftKey || isShiftPressed,
-      );
+      const shouldConstrain = event.shiftKey || isShiftPressed;
+      const attachedDevicePoint = draggingDevice.detachAttachedCablePoints
+        ? shouldConstrain
+          ? constrainTo45Degrees(draggingDevice.startPoint, editPoint)
+          : editPoint
+        : constrainAttachedDevicePoint(
+            editPoint,
+            draggingDevice.attachedCablePoints,
+            cables,
+            shouldConstrain,
+          );
       setDevices((current) =>
         current.map((device) =>
           device.id === draggingDevice.deviceId ? { ...device, point: attachedDevicePoint } : device,
@@ -5326,6 +5436,12 @@ function App() {
               (attachment) => attachment.routeId === route.id,
             );
             if (attachments.length === 0) return route;
+            if (draggingDevice.detachAttachedCablePoints) {
+              return attachments.reduce<CableRoute>(
+                (editedRoute, attachment) => routeWithDetachedCablePoint(editedRoute, attachment),
+                route,
+              );
+            }
             let nextRoute: CableRoute = {
               ...route,
               points: route.points.map((routePoint, index) => {
@@ -5366,13 +5482,21 @@ function App() {
     }
   }
 
+  function cleanupLoneCablePoints() {
+    flushSync(() => {
+      setCables((current) => compactCableRoutes(current));
+    });
+  }
+
   function handlePointerUp(event: PointerEvent) {
     if (draggingSelection && draggingSelection.pointerId === event.pointerId) {
+      cleanupLoneCablePoints();
       setDraggingSelection(null);
       finishUndoGroup();
       return;
     }
     if (scalingSelection && scalingSelection.pointerId === event.pointerId) {
+      cleanupLoneCablePoints();
       setScalingSelection(null);
       finishUndoGroup();
       return;
@@ -5384,6 +5508,7 @@ function App() {
       }
     }
     if (rotatingSelection && rotatingSelection.pointerId === event.pointerId) {
+      cleanupLoneCablePoints();
       setRotatingSelection(null);
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -5401,6 +5526,7 @@ function App() {
       setMeasurementDraft(null);
     }
     setScaleDraft(null);
+    cleanupLoneCablePoints();
     setDraggingDevice(null);
     setDraggingCablePoint(null);
   }
@@ -5620,6 +5746,7 @@ function App() {
     const attachedCablePoints = selectedDragDevices.flatMap((device) =>
       attachedCablePointsForDevice(device, cables),
     );
+    const detachAttachedCablePoints = event.altKey;
     const affectedRouteIds = new Set([
       ...cableIds,
       ...attachedCablePoints.map((attachment) => attachment.routeId),
@@ -5628,6 +5755,7 @@ function App() {
       attachedCablePoints,
       bounds,
       cableIds: [...cableIds],
+      detachAttachedCablePoints,
       initialDevices: selectedDragDevices.map((device) => ({
         ...device,
         point: clonePoint(device.point),
@@ -7531,6 +7659,7 @@ function App() {
                       selectDevices([device.id]);
                       setDraggingDevice({
                         deviceId: device.id,
+                        detachAttachedCablePoints: event.altKey,
                         startPoint: device.point,
                         attachedCablePoints: attachedCablePointsForDevice(
                           device,
@@ -7661,9 +7790,10 @@ function App() {
             "Drag between two points to measure a temporary distance. Measurements clear when you switch tools."}
           {mode === "cable" &&
             "Click to add route points. Hold Shift to snap to 45 degrees. Backspace removes the previous point."}
-          {mode === "device" && "Click on the floor plan to place the selected device."}
+          {mode === "device" &&
+            "Click on the floor plan to place the selected device. Drag a device to move it; hold Alt/Option to detach attached cable points."}
           {mode === "select" &&
-            "Drag selected objects to move them. Use the top knob to rotate, or the corner handle to scale."}
+            "Drag selected objects to move them. Hold Alt/Option while dragging devices to detach attached cable points. Use the top knob to rotate, or the corner handle to scale."}
         </footer>
       </section>
 

@@ -192,6 +192,8 @@ button svg {
   flex-direction: column;
   gap: 1rem;
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 1rem;
