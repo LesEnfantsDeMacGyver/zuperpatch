@@ -1448,7 +1448,7 @@ function canCableConnectDevice(cableType: CableType, deviceType: DeviceType) {
     return deviceType === "switch" || deviceType === "ethernetClient" || deviceType === "consumer";
   }
   if (cableType === "xlr") {
-    return deviceType === "consumer" || deviceType === "switch" || deviceType === "producer";
+    return deviceType === "consumer" || deviceType === "switch";
   }
   return false;
 }
@@ -1482,9 +1482,7 @@ function canCableConnectDeviceTypes(
   if (cableType === "xlr") {
     return (
       deviceTypes === "consumer:consumer" ||
-      deviceTypes === "consumer:producer" ||
       deviceTypes === "consumer:switch" ||
-      deviceTypes === "producer:switch" ||
       deviceTypes === "switch:switch"
     );
   }
