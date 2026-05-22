@@ -702,6 +702,7 @@ h2 {
   font-size: 1.1rem;
   line-height: 1.15;
   margin: 0;
+  text-transform: none;
 }
 
 .cable-info-close {
