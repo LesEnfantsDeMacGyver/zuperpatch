@@ -669,10 +669,11 @@ h2 {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   box-shadow: 0 14px 32px var(--color-shadow);
-  min-width: 260px;
+  max-width: calc(100% - 2rem);
+  min-width: min(390px, calc(100% - 2rem));
   padding: 0.9rem;
   pointer-events: auto;
-  width: min(340px, calc(100% - 2rem));
+  width: max-content;
 }
 
 .cable-info-title {
@@ -699,6 +700,7 @@ h2 {
   line-height: 1.15;
   margin: 0;
   text-transform: none;
+  white-space: nowrap;
 }
 
 .cable-info-close {
