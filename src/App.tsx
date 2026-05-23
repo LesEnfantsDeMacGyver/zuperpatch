@@ -4037,7 +4037,7 @@ function App() {
       resolveDeviceCableAttachments(selectedDevice, cables, "xlr").forEach((attachment, index) => {
         addRouteToSelectedDevice(
           attachment.route,
-          "consumer",
+          "switch",
           `xlr-consumer-${attachment.route.id}-${index}`,
         );
       });
