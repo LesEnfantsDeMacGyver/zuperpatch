@@ -2299,6 +2299,8 @@ function App() {
   const cableInfoRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
+  const floorPlanInputRef = useRef<HTMLInputElement | null>(null);
+  const loadMenuRef = useRef<HTMLDivElement | null>(null);
   const planViewportRef = useRef<HTMLDivElement | null>(null);
   const projectLoadInputRef = useRef<HTMLInputElement | null>(null);
   const planScrollRef = useRef<HTMLDivElement | null>(null);
@@ -2348,6 +2350,7 @@ function App() {
   const [cableInfoPosition, setCableInfoPosition] = useState<Point | null>(null);
   const [closedCableInfoRouteId, setClosedCableInfoRouteId] = useState<string | null>(null);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const [loadMenuOpen, setLoadMenuOpen] = useState(false);
   const [copiedDevice, setCopiedDevice] = useState<Device | null>(null);
   const [poppedDeviceId, setPoppedDeviceId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -2691,6 +2694,7 @@ function App() {
       }
       if (event.key === "Escape") {
         setDownloadMenuOpen(false);
+        setLoadMenuOpen(false);
         clearRouteDraft();
         setDraggingConduitSegment(null);
         setScaleDraft(null);
@@ -2727,17 +2731,22 @@ function App() {
   });
 
   useEffect(() => {
-    if (!downloadMenuOpen) return undefined;
+    if (!downloadMenuOpen && !loadMenuOpen) return undefined;
     const onPointerDown = (event: globalThis.PointerEvent) => {
-      const menuElement = downloadMenuRef.current;
-      if (menuElement && event.target instanceof Node && menuElement.contains(event.target)) {
+      if (!(event.target instanceof Node)) {
+        setDownloadMenuOpen(false);
+        setLoadMenuOpen(false);
         return;
       }
+      const clickedDownloadMenu = downloadMenuRef.current?.contains(event.target) ?? false;
+      const clickedLoadMenu = loadMenuRef.current?.contains(event.target) ?? false;
+      if (clickedDownloadMenu || clickedLoadMenu) return;
       setDownloadMenuOpen(false);
+      setLoadMenuOpen(false);
     };
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [downloadMenuOpen]);
+  }, [downloadMenuOpen, loadMenuOpen]);
 
   useEffect(() => {
     if (mode === "cable") return;
@@ -7366,16 +7375,6 @@ function App() {
 
       <section className="workspace" aria-label="Floor plan workspace">
         <header className="topbar">
-          <label className="upload-control toolbar-upload">
-            <FileUp aria-hidden="true" />
-            <span>{pdfName || "Upload floor plan PDF"}</span>
-            <input
-              aria-label="Upload floor plan PDF"
-              accept="application/pdf"
-              type="file"
-              onChange={(event) => handleFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
           <div className="action-strip">
             <div className="download-split" ref={downloadMenuRef}>
               <button className="download-main" type="button" onClick={downloadProject}>
@@ -7387,7 +7386,10 @@ function App() {
                 aria-label="Download options"
                 className="download-arrow"
                 type="button"
-                onClick={() => setDownloadMenuOpen((open) => !open)}
+                onClick={() => {
+                  setLoadMenuOpen(false);
+                  setDownloadMenuOpen((open) => !open);
+                }}
               >
                 <ChevronDown aria-hidden="true" />
               </button>
@@ -7416,10 +7418,56 @@ function App() {
                 </div>
               )}
             </div>
-            <button type="button" onClick={() => projectLoadInputRef.current?.click()}>
-              <Upload aria-hidden="true" />
-              Load
-            </button>
+            <div className="download-split" ref={loadMenuRef}>
+              <button
+                className="download-main"
+                type="button"
+                onClick={() => projectLoadInputRef.current?.click()}
+              >
+                <Upload aria-hidden="true" />
+                Load
+              </button>
+              <button
+                aria-expanded={loadMenuOpen}
+                aria-label="Load options"
+                className="download-arrow"
+                type="button"
+                onClick={() => {
+                  setDownloadMenuOpen(false);
+                  setLoadMenuOpen((open) => !open);
+                }}
+              >
+                <ChevronDown aria-hidden="true" />
+              </button>
+              {loadMenuOpen && (
+                <div className="download-menu" role="menu">
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setLoadMenuOpen(false);
+                      floorPlanInputRef.current?.click();
+                    }}
+                  >
+                    Floor plan
+                  </button>
+                </div>
+              )}
+            </div>
+            <input
+              accept="application/pdf"
+              aria-label="Upload floor plan PDF"
+              className="hidden-file-input"
+              onChange={(event) => {
+                void handleFile(event.target.files?.[0] ?? null).finally(() => {
+                  if (floorPlanInputRef.current) {
+                    floorPlanInputRef.current.value = "";
+                  }
+                });
+              }}
+              ref={floorPlanInputRef}
+              type="file"
+            />
             <input
               accept="application/json,.json"
               className="hidden-file-input"

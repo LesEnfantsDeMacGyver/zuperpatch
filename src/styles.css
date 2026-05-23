@@ -254,36 +254,6 @@ h2 {
   font-size: 0.82rem;
 }
 
-.upload-control {
-  align-items: center;
-  background: var(--color-upload-bg);
-  border: 1px dashed var(--color-upload-border);
-  border-radius: 8px;
-  color: var(--color-upload-text);
-  cursor: pointer;
-  display: flex;
-  gap: 0.65rem;
-  min-height: 48px;
-  padding: 0.75rem;
-}
-
-.upload-control span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.upload-control input {
-  display: none;
-}
-
-.toolbar-upload {
-  flex: 0 1 260px;
-  min-height: 40px;
-  min-width: 180px;
-  padding: 0.55rem 0.75rem;
-}
-
 .hidden-file-input {
   display: none;
 }
@@ -1369,8 +1339,4 @@ dd {
     flex-direction: column;
   }
 
-  .toolbar-upload {
-    flex-basis: auto;
-    max-width: none;
-  }
 }
