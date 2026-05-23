@@ -553,9 +553,10 @@ h2 {
   border-radius: 8px;
   box-shadow: 0 14px 32px var(--color-shadow);
   display: grid;
-  gap: 0.25rem;
+  gap: 0;
   min-width: 190px;
-  padding: 0.35rem;
+  overflow: hidden;
+  padding: 0.25rem;
   position: absolute;
   right: 0;
   top: calc(100% + 0.4rem);
@@ -563,8 +564,19 @@ h2 {
 }
 
 .download-menu button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
   justify-content: flex-start;
+  min-height: 34px;
+  padding: 0.45rem 0.65rem;
   width: 100%;
+}
+
+.download-menu button:hover:not(:disabled),
+.download-menu button:focus-visible {
+  background: var(--color-hover-bg);
 }
 
 .icon-toolbar-button {
