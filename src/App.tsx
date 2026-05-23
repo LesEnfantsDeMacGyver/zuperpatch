@@ -11,8 +11,8 @@ import {
   PencilRuler,
   PlugZap,
   Plus,
+  Redo2,
   Ruler,
-  Trash2,
   Undo2,
   Upload,
   X,
@@ -2360,6 +2360,7 @@ function App() {
   const [isPanningWithSpace, setIsPanningWithSpace] = useState(false);
   const [viewPosition, setViewPosition] = useState<ViewPosition>(defaultViewPosition);
   const undoHistoryRef = useRef<UndoSnapshot[]>([]);
+  const redoHistoryRef = useRef<UndoSnapshot[]>([]);
   const lastUndoSnapshotRef = useRef<UndoSnapshot | null>(null);
   const lastUndoSnapshotKeyRef = useRef("");
   const applyingUndoRef = useRef(false);
@@ -2701,7 +2702,14 @@ function App() {
         setMeasurements([]);
         setMeasurementDraft(null);
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        (event.key.toLowerCase() === "y" ||
+          (event.shiftKey && event.key.toLowerCase() === "z"))
+      ) {
+        event.preventDefault();
+        redoLast();
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         undoLast();
       }
@@ -4518,6 +4526,16 @@ function App() {
     }
   }
 
+  function pushRedoSnapshot(snapshot: UndoSnapshot) {
+    redoHistoryRef.current.push(cloneUndoSnapshot(snapshot));
+    if (redoHistoryRef.current.length > maxUndoHistory) {
+      redoHistoryRef.current.splice(
+        0,
+        redoHistoryRef.current.length - maxUndoHistory,
+      );
+    }
+  }
+
   function beginUndoGroup() {
     if (undoGroupActiveRef.current) return;
     const snapshot = cloneUndoSnapshot(currentUndoSnapshot());
@@ -4537,6 +4555,7 @@ function App() {
 
     if (startSnapshot && currentKey !== undoGroupStartKeyRef.current) {
       pushUndoSnapshot(startSnapshot);
+      redoHistoryRef.current = [];
     }
 
     undoGroupStartKeyRef.current = "";
@@ -4661,6 +4680,7 @@ function App() {
 
     if (snapshotKey !== lastUndoSnapshotKeyRef.current) {
       pushUndoSnapshot(lastUndoSnapshotRef.current);
+      redoHistoryRef.current = [];
       lastUndoSnapshotKeyRef.current = snapshotKey;
     }
 
@@ -5741,8 +5761,26 @@ function App() {
     const previousSnapshot = undoHistoryRef.current.pop();
     if (!previousSnapshot) return;
 
+    const currentSnapshot = currentUndoSnapshot();
+    if (undoSnapshotKey(currentSnapshot) !== undoSnapshotKey(previousSnapshot)) {
+      pushRedoSnapshot(currentSnapshot);
+    }
+
     applyingUndoRef.current = true;
     void restoreUndoSnapshot(previousSnapshot);
+  }
+
+  function redoLast() {
+    const nextSnapshot = redoHistoryRef.current.pop();
+    if (!nextSnapshot) return;
+
+    const currentSnapshot = currentUndoSnapshot();
+    if (undoSnapshotKey(currentSnapshot) !== undoSnapshotKey(nextSnapshot)) {
+      pushUndoSnapshot(currentSnapshot);
+    }
+
+    applyingUndoRef.current = true;
+    void restoreUndoSnapshot(nextSnapshot);
   }
 
   function deleteSelected() {
@@ -7475,17 +7513,23 @@ function App() {
               ref={projectLoadInputRef}
               type="file"
             />
-            <button type="button" onClick={undoLast}>
+            <button
+              aria-label="Undo"
+              className="icon-toolbar-button"
+              title="Undo"
+              type="button"
+              onClick={undoLast}
+            >
               <Undo2 aria-hidden="true" />
-              Undo
             </button>
             <button
+              aria-label="Redo"
+              className="icon-toolbar-button"
+              title="Redo"
               type="button"
-              disabled={!selectedId && selectedDeviceIds.length === 0 && selectedCableIds.length === 0}
-              onClick={deleteSelected}
+              onClick={redoLast}
             >
-              <Trash2 aria-hidden="true" />
-              Delete
+              <Redo2 aria-hidden="true" />
             </button>
           </div>
         </header>

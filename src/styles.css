@@ -567,6 +567,12 @@ h2 {
   width: 100%;
 }
 
+.icon-toolbar-button {
+  inline-size: 36px;
+  justify-content: center;
+  padding-inline: 0;
+}
+
 .plan-viewport {
   min-height: 0;
   min-width: 0;
