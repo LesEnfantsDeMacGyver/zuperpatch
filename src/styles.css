@@ -556,6 +556,47 @@ h2 {
   margin-left: auto;
 }
 
+.download-split {
+  display: inline-flex;
+  position: relative;
+}
+
+.download-split > button {
+  min-height: 36px;
+}
+
+.download-main {
+  border-bottom-right-radius: 0;
+  border-right: 0;
+  border-top-right-radius: 0;
+}
+
+.download-arrow {
+  border-bottom-left-radius: 0;
+  border-top-left-radius: 0;
+  padding-inline: 0.5rem;
+}
+
+.download-menu {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 14px 32px var(--color-shadow);
+  display: grid;
+  gap: 0.25rem;
+  min-width: 190px;
+  padding: 0.35rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 30;
+}
+
+.download-menu button {
+  justify-content: flex-start;
+  width: 100%;
+}
+
 .plan-viewport {
   min-height: 0;
   min-width: 0;

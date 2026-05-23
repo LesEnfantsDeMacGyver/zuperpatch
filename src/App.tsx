@@ -1,5 +1,6 @@
 import {
   Cable,
+  ChevronDown,
   CircuitBoard,
   Download,
   EthernetPort,
@@ -2297,6 +2298,7 @@ function undoSnapshotKey(snapshot: UndoSnapshot) {
 function App() {
   const cableInfoRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const planViewportRef = useRef<HTMLDivElement | null>(null);
   const projectLoadInputRef = useRef<HTMLInputElement | null>(null);
   const planScrollRef = useRef<HTMLDivElement | null>(null);
@@ -2345,6 +2347,7 @@ function App() {
   const [cableInfoDrag, setCableInfoDrag] = useState<CableInfoDrag | null>(null);
   const [cableInfoPosition, setCableInfoPosition] = useState<Point | null>(null);
   const [closedCableInfoRouteId, setClosedCableInfoRouteId] = useState<string | null>(null);
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
   const [copiedDevice, setCopiedDevice] = useState<Device | null>(null);
   const [poppedDeviceId, setPoppedDeviceId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -2687,6 +2690,7 @@ function App() {
         return;
       }
       if (event.key === "Escape") {
+        setDownloadMenuOpen(false);
         clearRouteDraft();
         setDraggingConduitSegment(null);
         setScaleDraft(null);
@@ -2721,6 +2725,19 @@ function App() {
       window.removeEventListener("blur", onWindowBlur);
     };
   });
+
+  useEffect(() => {
+    if (!downloadMenuOpen) return undefined;
+    const onPointerDown = (event: globalThis.PointerEvent) => {
+      const menuElement = downloadMenuRef.current;
+      if (menuElement && event.target instanceof Node && menuElement.contains(event.target)) {
+        return;
+      }
+      setDownloadMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [downloadMenuOpen]);
 
   useEffect(() => {
     if (mode === "cable") return;
@@ -7360,18 +7377,45 @@ function App() {
             />
           </label>
           <div className="action-strip">
-            <button type="button" onClick={downloadProject}>
-              <Download aria-hidden="true" />
-              Download
-            </button>
-            <button type="button" onClick={downloadPlanPdf}>
-              <Download aria-hidden="true" />
-              Plan PDF
-            </button>
-            <button type="button" onClick={downloadBillOfMaterials}>
-              <Download aria-hidden="true" />
-              BOM PDF
-            </button>
+            <div className="download-split" ref={downloadMenuRef}>
+              <button className="download-main" type="button" onClick={downloadProject}>
+                <Download aria-hidden="true" />
+                Download
+              </button>
+              <button
+                aria-expanded={downloadMenuOpen}
+                aria-label="Download options"
+                className="download-arrow"
+                type="button"
+                onClick={() => setDownloadMenuOpen((open) => !open)}
+              >
+                <ChevronDown aria-hidden="true" />
+              </button>
+              {downloadMenuOpen && (
+                <div className="download-menu" role="menu">
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setDownloadMenuOpen(false);
+                      void downloadPlanPdf();
+                    }}
+                  >
+                    Annotated plan
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setDownloadMenuOpen(false);
+                      downloadBillOfMaterials();
+                    }}
+                  >
+                    Bill-of-materials
+                  </button>
+                </div>
+              )}
+            </div>
             <button type="button" onClick={() => projectLoadInputRef.current?.click()}>
               <Upload aria-hidden="true" />
               Load
