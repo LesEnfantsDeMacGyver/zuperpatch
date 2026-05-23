@@ -6580,12 +6580,12 @@ function App() {
                 Measure
               </button>
               <button
-                className={planningMode ? "active wide-segment" : "wide-segment"}
+                className={planningMode ? "active" : ""}
                 type="button"
                 onClick={() => setMode(planningMode ? mode : "cable")}
               >
                 <Cable aria-hidden="true" />
-                Cable / Device
+                Cable/Device
               </button>
             </div>
           </section>

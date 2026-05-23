@@ -312,7 +312,7 @@ h2 {
 .segmented {
   display: grid;
   gap: 0.45rem;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .compact-segmented {
@@ -346,10 +346,6 @@ h2 {
 
 .connected-segmented button:hover:not(:disabled) {
   background: var(--color-hover-bg);
-}
-
-.wide-segment {
-  grid-column: 1 / -1;
 }
 
 .segmented button.active,
